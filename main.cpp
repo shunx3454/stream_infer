@@ -6,38 +6,67 @@
  * are strictly prohibited without prior written permission from the author.
  */
 
+#include <fcntl.h>
+#include <linux/dma-heap.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <im2d_type.h>
 #include <iostream>
 #include <memory>
-#include <opencv2/highgui.hpp>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include <im2d_buffer.h>
-#include <im2d_common.h>
-#include <im2d_single.h>
-#include <rga.h>
+#include <RockchipRga.h>
+#include <im2d.hpp>
 
 #include <opencv2/core/core.hpp>
-#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv4/opencv2/opencv.hpp>
+
+#include "v4l_cap.hpp"
 
 #include <rknn_api.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#include "dma_alloc.h"
 #include "postprocess.h"
 #include "preprocess.h"
+#include "utils.h"
 
 #define W_ALIGN 16
 #define H_ALIGN 2
 
+static std::vector<uchar> read_file(const std::string &path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) {
+        return {};
+    }
+
+    ifs.seekg(0, std::ios::end);
+    size_t size = ifs.tellg();
+    ifs.seekg(0, std::ios::beg);
+
+    std::vector<uchar> data(size);
+    ifs.read(reinterpret_cast<char *>(data.data()), size);
+    return data;
+}
+
 int main(int argc, char *argv[]) {
+
+#if 0
   rknn_context ctx;
   rknn_core_mask cm = RKNN_NPU_CORE_0;
   rknn_sdk_version rknn_ver;
@@ -184,6 +213,16 @@ int main(int argc, char *argv[]) {
   // cv::imwrite("/home/rock/c_cpp/stream_infer/asset/person_crop.png",
   // img_rgb);
 
+  // rga info && set core
+  {
+      std::cout << querystring(RGA_ALL) << std::endl;
+      IM_STATUS status = imconfig(IM_CONFIG_PRIORITY, IM_SCHEDULER_RGA3_DEFAULT);
+      if (IM_STATUS_SUCCESS != status) {
+          std::cerr << "imconfig error: " << status << std::endl;
+          throw std::runtime_error("imconfig error");
+      }
+  }
+
   // rga resize
   // 指定目标大小和预处理方式,默认使用LetterBox的预处理
   int model_in_width = in_attrs[0].dims[2];
@@ -287,23 +326,21 @@ int main(int argc, char *argv[]) {
              group.results[n].name, group.results[n].prop);
     }
 
+    // release output
+    ret = rknn_outputs_release(ctx, io_num.n_output, outputs.data());
+    if (ret < 0) {
+      std::cerr << "rknn_outputs_release error: " << ret << std::endl;
+      throw std::runtime_error("rknn_outputs_release error");
+    }
+
     // 画框
-    // dst = wrapbuffer_virtualaddr_t(img.data, img.cols, img.rows, img.step1(),
-    //                                img.rows,
-    //                                RK_FORMAT_RGB_888); // wstride, hstride,
-    // im_rect rests[group.count];
-    // for (int n = 0; n < group.count; n++) {
-    //   rests[n].x = group.results[n].box.left;
-    //   rests[n].y = group.results[n].box.top;
-    //   rests[n].width = group.results[n].box.right - group.results[n].box.left;
-    //   rests[n].height = group.results[n].box.bottom - group.results[n].box.top;
-    // }
-    // IM_STATUS status =
-    //     imrectangleArray(dst, rests, group.count, 0x00FF0000, 0x00FF0000, 2);
-    // if (IM_STATUS_SUCCESS != status) {
-    //   std::cerr << "imrectangleArray error: " << status << std::endl;
-    //   throw std::runtime_error("imrectangleArray error");
-    // }
+    std::vector<im_rect> rects(group.count);
+    for (int n = 0; n < group.count; n++) {
+      rects[n].x = group.results[n].box.left;
+      rects[n].y = group.results[n].box.top;
+      rects[n].width = group.results[n].box.right - group.results[n].box.left;
+      rects[n].height = group.results[n].box.bottom - group.results[n].box.top;
+    }
     for (int n = 0; n < group.count; n++) {
       cv::rectangle(
           resized_img,
@@ -315,17 +352,211 @@ int main(int argc, char *argv[]) {
     }
     cv::imwrite("/home/rock/c_cpp/stream_infer/asset/person_detected.png",
                 resized_img);
-    cv::imshow("result", resized_img);
-    cv::waitKey(0);
-
-    // release output
-    ret = rknn_outputs_release(ctx, io_num.n_output, outputs.data());
-    if (ret < 0) {
-      std::cerr << "rknn_outputs_release error: " << ret << std::endl;
-      throw std::runtime_error("rknn_outputs_release error");
-    }
   }
+#endif
 
-  rknn_destroy(ctx);
-  return 0;
+    // im draw rect
+    // {
+    //   imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
+    //   cv::Mat img2 =
+    //       cv::imread("/home/rock/c_cpp/stream_infer/asset/person_cropped.png");
+    //   int img_width = 160;
+    //   int img_height = 160;
+    //   int img_size = img2.total() * img2.elemSize();
+
+    //   std::cout << "image width=" << img_width << ", height=" << img_height
+    //             << ", size=" << img_size << " bytes." << std::endl;
+    //   rga_buffer_t img2_buf = wrapbuffer_virtualaddr(
+    //       (void *)img2.data, img_width, img_height, RK_FORMAT_RGB_888);
+
+    //   im_rect rect{};
+    //   rect.x = 0;
+    //   rect.y = 0;
+    //   rect.width = 160;
+    //   rect.height = 160;
+    //   std::cout << "draw rect: (" << rect.x << ", " << rect.y << ", "
+    //             << rect.width << ", " << rect.height << ")" << std::endl;
+
+    //   IM_STATUS status = imfill(img2_buf, rect, 0x000000FF);
+    //   if (IM_STATUS_SUCCESS != status) {
+    //     releasebuffer_handle(img2_buf.handle);
+    //     std::cerr << "imfill error: " << status << std::endl;
+    //     throw std::runtime_error("imfill error");
+    //   }
+    //   cv::imwrite("/home/rock/c_cpp/stream_infer/asset/person_cropped_rect.png",
+    //               img2);
+    //   releasebuffer_handle(img2_buf.handle);
+    // }
+
+    {
+        FLAGS_minloglevel = 0;
+        FLAGS_alsologtostderr = true;
+        FLAGS_colorlogtostderr = true;
+        google::InitGoogleLogging(argv[0]);
+
+        LOG(INFO) << "This is an info message.";
+        LOG(WARNING) << "This is a warning message.";
+        LOG(ERROR) << "This is an error message.";
+    }
+
+#if 0
+    {
+        // imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
+        std::cout << querystring(RGA_ALL) << std::endl;
+
+        std::string filename = "/home/rock/c_cpp/stream_infer/asset/person_cropped.png";
+
+        int w = 0;
+        int h = 0;
+        int file_channels = 0;
+
+        if (!stbi_info(filename.c_str(), &w, &h, &file_channels)) {
+            printf("stbi_info failed: %s\n", stbi_failure_reason());
+            return -1;
+        }
+        std::cout << "image width=" << w << ", height=" << h << ", channels=" << file_channels << std::endl;
+
+        int ret;
+        void *src_buf = nullptr;
+        void *dst_buf = nullptr;
+        int src_dma_fd = -1;
+        int dst_dma_fd = -1;
+        int img_height = h;
+        int img_width = w;
+
+        int img_target_width = 800;
+        int img_target_height = 600;
+        img_width = (img_width + W_ALIGN - 1) / W_ALIGN * W_ALIGN;
+        img_height = (img_height + H_ALIGN - 1) / H_ALIGN * H_ALIGN;
+        size_t src_buf_size = img_height * img_width * file_channels;
+        size_t dst_buf_size = img_target_width * img_target_height * file_channels;
+
+        /* Allocate cacheable dma_buf, return dma_fd and virtual address. */
+        ret = dma_buf_alloc("/dev/dma_heap/cma", src_buf_size, &src_dma_fd, (void **)&src_buf);
+        if (ret < 0) {
+            printf("alloc src dma_heap buffer failed!\n");
+            return -1;
+        }
+        ret = dma_buf_alloc("/dev/dma_heap/cma", dst_buf_size, &dst_dma_fd, (void **)&dst_buf);
+        if (ret < 0) {
+            printf("alloc dst dma_heap buffer failed!\n");
+            dma_buf_free(src_buf_size, src_dma_fd, src_buf);
+            return -1;
+        }
+
+        cv::Mat img(img_height, img_width, CV_8UC3, src_buf);
+        std::vector<uchar> raw_data = read_file(filename);
+        cv::Mat decoded = cv::imdecode(raw_data, cv::IMREAD_COLOR, &img);
+        if (decoded.empty() || decoded.data != img.data) {
+            printf("cv::imdecode failed\n");
+            dma_buf_free(src_buf_size, src_dma_fd, src_buf);
+            dma_buf_free(dst_buf_size, dst_dma_fd, dst_buf);
+            return -1;
+        }
+
+        cv::Mat resized_img(img_target_height, img_target_width, CV_8UC3, dst_buf);
+
+        rga_buffer_t src;
+        rga_buffer_t dst;
+        rga_buffer_handle_t src_handle;
+        rga_buffer_handle_t dst_handle;
+        im_rect src_rect;
+        im_rect dst_rect;
+        memset(&src_rect, 0, sizeof(src_rect));
+        memset(&dst_rect, 0, sizeof(dst_rect));
+        // auto src_handle = importbuffer_virtualaddr((void *)img.data,
+        //                                            img.total() * img.elemSize());
+        // auto dst_handle = importbuffer_virtualaddr(
+        //     (void *)resized_img.data, resized_img.total() *
+        //     resized_img.elemSize());
+        // src = wrapbuffer_handle(src_handle, img.cols, img.rows,
+        // RK_FORMAT_RGB_888); dst = wrapbuffer_handle(dst_handle, img_target_width,
+        // img_target_height,
+        //                         RK_FORMAT_RGB_888);
+
+        // src = wrapbuffer_virtualaddr((void *)img.data, img.cols, img.rows,
+        //                              RK_FORMAT_RGB_888);
+        // dst = wrapbuffer_virtualaddr((void *)resized_img.data, img_target_width,
+        //                              img_target_height, RK_FORMAT_RGB_888);
+
+        // src_handle = importbuffer_fd(src_dma_fd, src_buf_size);
+        // dst_handle = importbuffer_fd(dst_dma_fd, dst_buf_size);
+        // src = wrapbuffer_handle(src_handle, img.cols, img.rows,
+        // RK_FORMAT_RGB_888); dst = wrapbuffer_handle(dst_handle, img_target_width,
+        // img_target_height,
+        //                         RK_FORMAT_RGB_888);
+
+        src = wrapbuffer_fd(src_dma_fd, img.cols, img.rows, RK_FORMAT_RGB_888);
+        dst = wrapbuffer_fd(dst_dma_fd, img_target_width, img_target_height, RK_FORMAT_RGB_888);
+
+        // src_rect.x = 0;
+        // src_rect.y = 0;
+        // src_rect.width = img.cols;
+        // src_rect.height = img.rows;
+
+        // dst_rect.x = 0;
+        // dst_rect.y = 0;
+        // dst_rect.width = img_target_width;
+        // dst_rect.height = img_target_height;
+
+        ret = imcheck(src, dst, src_rect, dst_rect);
+        if (IM_STATUS_NOERROR != ret) {
+            fprintf(stderr, "rga check error! %s", imStrError((IM_STATUS)ret));
+            return -1;
+        }
+
+        dma_sync_cpu_to_device(src_dma_fd);
+        dma_sync_cpu_to_device(dst_dma_fd);
+
+        IM_STATUS STATUS = imresize(src, dst);
+        if (IM_STATUS_SUCCESS != STATUS) {
+            fprintf(stderr, "rga resize error! %s", imStrError(STATUS));
+            return -1;
+        }
+        ret = imrectangle(dst, {0, 0, 100, 100}, 0x00000000ff, 4);
+        if (IM_STATUS_SUCCESS != ret) {
+            fprintf(stderr, "rga fill error! %s", imStrError(STATUS));
+            return -1;
+        }
+
+        ret = imfill(dst, {500, 500, 80, 80}, 0x0000ff00);
+        if (IM_STATUS_SUCCESS != ret) {
+            fprintf(stderr, "rga fill error! %s", imStrError(STATUS));
+            return -1;
+        }
+
+        dma_sync_device_to_cpu(dst_dma_fd);
+        cv::imwrite("/home/rock/c_cpp/stream_infer/asset/person_resized_rga.png", resized_img);
+
+        // releasebuffer_handle(src_handle);
+        // releasebuffer_handle(dst_handle);
+
+        dma_buf_free(src_buf_size, src_dma_fd, src_buf);
+        dma_buf_free(dst_buf_size, dst_dma_fd, dst_buf);
+
+        // imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
+        // BOX_RECT pads;
+        // memset(&pads, 0, sizeof(BOX_RECT));
+        // // 计算缩放比例
+        // resize_rga(src, dst, img, resized_img, target_size);
+    }
+#endif
+
+    {
+        std::string device = "/dev/video11";
+        if (argc > 1) {
+            device = argv[1];
+        }
+
+        Video video;
+        video.init(device.c_str());
+        video.streamon_mp_dmabuf();
+
+        for (int i = 0; i < 60; i++) {
+            video.capture_test();
+        }
+    }
+
+    // rknn_destroy(ctx);
+    return 0;
 }
