@@ -7,6 +7,7 @@
  */
 
 #include <fcntl.h>
+#include <fmt/core.h>
 #include <linux/dma-heap.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -552,9 +553,16 @@ int main(int argc, char *argv[]) {
         video.init(device.c_str());
         video.streamon_mp_dmabuf();
 
-        for (int i = 0; i < 60; i++) {
-            video.capture_test();
+        cv::namedWindow("capture", cv::WINDOW_NORMAL);
+
+        while (1) {
+            if (video.captrue_mp_dma_test() < 0) {
+                break;
+            }
+			//std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
+
+        cv::destroyWindow("capture");
     }
 
     // rknn_destroy(ctx);

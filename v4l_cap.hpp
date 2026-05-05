@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <opencv2/core/hal/interface.h>
 #include <stdexcept>
 
 #include <opencv2/core/mat.hpp>
@@ -27,6 +28,10 @@
 #include <glog/logging.h>
 
 #include "dma_alloc.h"
+#include "im2d_buffer.h"
+#include "im2d_single.h"
+#include <RockchipRga.h>
+#include <im2d.hpp>
 
 #define SENSOR_DEV "/dev/v4l-subdev2"
 #define MIN_VBLANK 58
@@ -61,6 +66,16 @@ class Video {
     size_t width;
     size_t height;
     size_t frame_size{0};
+    int rga_dst_dma_fd{-1};
+    void *rga_dst_buf{NULL};
+
+    rga_buffer_t src{};
+    rga_buffer_t dst{};
+    rga_buffer_handle_t src_handle{};
+    rga_buffer_handle_t dst_handle{};
+    im_rect src_rect{};
+    im_rect dst_rect{};
+
     enum fmt_type fmt_ { NV12 };
     enum mem_type mem_ { MMAP };
 
@@ -310,10 +325,10 @@ class Video {
         fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
         fmt.fmt.pix_mp.width = 1920;
         fmt.fmt.pix_mp.height = 1088;
-        fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12;
+        fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_UYVY;
         fmt.fmt.pix_mp.num_planes = 1;
-        fmt.fmt.pix_mp.plane_fmt[0].bytesperline = 1920;
-        fmt.fmt.pix_mp.plane_fmt[0].sizeimage = 1920 * 1088;
+        fmt.fmt.pix_mp.plane_fmt[0].bytesperline = 1920 * 2;
+        fmt.fmt.pix_mp.plane_fmt[0].sizeimage = 1920 * 1088 * 2;
         fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
         if (ioctl(vfd, VIDIOC_S_FMT, &fmt) < 0) {
             perror("VIDIOC_S_FMT");
@@ -390,6 +405,15 @@ class Video {
                 return -1;
             }
         }
+
+        // 申请 RGA DMABUF
+        int rga_dst_buf_size = height * width * 3;
+        ret = dma_buf_alloc("/dev/dma_heap/cma", rga_dst_buf_size, &rga_dst_dma_fd, (void **)&rga_dst_buf);
+        if (ret < 0) {
+            printf("alloc src dma_heap buffer failed!\n");
+            return -1;
+        }
+        dst = wrapbuffer_fd(rga_dst_dma_fd, width, height, RK_FORMAT_RGB_888);
 
         // 启动采集
         if (isStreaming) {
@@ -688,19 +712,105 @@ class Video {
         }
     }
 
+    int captrue_mp_dma_test() {
+        int ret = 0;
+
+        if (!isCapturing) {
+            return -1;
+        }
+
+        struct v4l2_plane planes[1];
+        memset(&planes, 0, sizeof(struct v4l2_plane));
+
+        struct v4l2_buffer buf;
+        memset(&buf, 0, sizeof(struct v4l2_buffer));
+
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+        buf.memory = V4L2_MEMORY_DMABUF;
+        buf.m.planes = planes;
+        buf.length = 1;
+
+        // 从采集队列中取出一个缓冲区
+        if (ioctl(vfd, VIDIOC_DQBUF, &buf) < 0) {
+            perror("VIDIOC_DQBUF");
+            return -1;
+        }
+
+        fmt::print("DMABUF QBUF: index={}, seq={}, fd={}, bytesused={}\n", buf.index, buf.sequence,
+                   buf.m.planes[0].m.fd, buf.m.planes[0].bytesused);
+
+        src = wrapbuffer_fd(buffers[buf.index].dmafd, width, height, RK_FORMAT_VYUY_422);
+        src_rect.x = 0;
+        src_rect.y = 0;
+        src_rect.width = width;
+        src_rect.height = height;
+
+        dst_rect.x = 0;
+        dst_rect.y = 0;
+        dst_rect.width = width;
+        dst_rect.height = height;
+
+        ret = imcheck(src, dst, src_rect, dst_rect);
+        if (IM_STATUS_NOERROR != ret) {
+            fprintf(stderr, "rga check error! %s", imStrError((IM_STATUS)ret));
+            return -1;
+        }
+
+        IM_STATUS status = imcvtcolor(src, dst, RK_FORMAT_VYUY_422, RK_FORMAT_RGB_888);
+        if (status != IM_STATUS_SUCCESS) {
+            perror("imcvtcolor");
+            return -1;
+        }
+
+        // 同步到CPU
+        dma_sync_device_to_cpu(buffers[buf.index].dmafd);
+
+        // 读取NV12 数据 buffers[buf.index].vaddr 到OpenCV
+        // cv::Mat raw_uvuy(height, width, CV_8UC2, buffers[buf.index].vaddr);
+        // cv::Mat bgr;
+        // cv::cvtColor(raw_uvuy, bgr, cv::COLOR_YUV2BGR_UYVY);
+        // if (bgr.empty()) {
+        //     fmt::print("Color convert fail\n");
+        //     ret = -1;
+        // }
+        cv::Mat rgb(height, width, CV_8UC3, rga_dst_buf);
+        cv::imshow("capture", rgb);
+
+        int key = cv::waitKey(40);
+        if (key == 27 || key == 'q') {
+            ret = -1;
+        }
+
+        // if (!cv::imwrite("/home/rock/c_cpp/stream_infer/asset/captrue_" + std::to_string(buf.sequence) + ".jpg",
+        // bgr)) {
+        //     fmt::print("Image write fail\n");
+        //     return -1;
+        // }
+
+        // 处理完成后，将缓冲区重新入队
+        if (ioctl(vfd, VIDIOC_QBUF, &buf) < 0) {
+            perror("VIDIOC_QBUF");
+            return -1;
+        }
+
+        return ret;
+    }
+
     void capture_test() {
         if (!isCapturing) {
             // LOG(WARNING) << "not capturing";
             return;
         }
 
-        struct v4l2_buffer buf;
-        memset(&buf, 0, sizeof(struct v4l2_buffer));
-
         struct v4l2_plane planes[1];
         memset(&planes, 0, sizeof(struct v4l2_plane));
 
-        buf.type = buf_type;
+        struct v4l2_buffer buf;
+        memset(&buf, 0, sizeof(struct v4l2_buffer));
+
+        buf.type =
+
+            buf.type = buf_type;
         buf.memory = V4L2_MEMORY_MMAP;
         if (isMplane) {
             buf.m.planes = planes;
