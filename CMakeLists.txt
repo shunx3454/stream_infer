@@ -19,13 +19,16 @@ pkg_check_modules(Mpp REQUIRED IMPORTED_TARGET rockchip_mpp)
 pkg_check_modules(FMT REQUIRED IMPORTED_TARGET fmt)
 #pkg_check_modules(RGA REQUIRED IMPORTED_TARGET librga)
 
+message(STATUS "Mpp include dirs: ${Mpp_INCLUDE_DIRS}")
+message(STATUS "Mpp library dirs: ${Mpp_LIBRARY_DIRS}")
+message(STATUS "Mpp libraries: ${Mpp_LIBRARIES}")
+
 add_executable(${PROJECT_NAME}
     main.cpp
     postprocess.cpp
     preprocess.cpp
     dma_alloc.cpp
     utils.cpp
-
 )
 
 include_directories(${PROJECT_NAME}
@@ -39,6 +42,7 @@ target_link_libraries(${PROJECT_NAME}
     PkgConfig::OpenCV
     PkgConfig::FFMPEG
     PkgConfig::FMT
+    PkgConfig::Mpp
     #PkgConfig::RGA
         glog::glog
     /usr/lib/librknn_api.so

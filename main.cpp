@@ -36,6 +36,7 @@
 #include <opencv4/opencv2/opencv.hpp>
 
 #include "v4l_cap.hpp"
+#include "mpp_codec.hpp"
 
 #include <rknn_api.h>
 
@@ -544,25 +545,27 @@ int main(int argc, char *argv[]) {
 #endif
 
     {
-        std::string device = "/dev/video11";
+        std::string device_name = "/dev/video11";
         if (argc > 1) {
-            device = argv[1];
+            device_name = argv[1];
         }
 
-        Video video;
-        video.init(device.c_str());
-        video.streamon_mp_dmabuf();
+        // Video video;
+        // video.init(device_name.c_str());
+        // video.streamon_mp_dmabuf();
 
-        cv::namedWindow("capture", cv::WINDOW_NORMAL);
+        // cv::namedWindow("capture", cv::WINDOW_NORMAL);
+        // while (1) {
+        //     if (video.captrue_mp_dma_test() < 0) {
+        //         break;
+        //     }
+        //     // std::this_thread::sleep_for(std::chrono::microseconds(100));
+        // }
+        // cv::destroyWindow("capture");
 
-        while (1) {
-            if (video.captrue_mp_dma_test() < 0) {
-                break;
-            }
-			//std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
+		MppEncoder encoder;
+		encoder.init();
 
-        cv::destroyWindow("capture");
     }
 
     // rknn_destroy(ctx);

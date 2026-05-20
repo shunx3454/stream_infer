@@ -736,7 +736,8 @@ class Video {
             return -1;
         }
 
-        fmt::print("DMABUF QBUF: index={}, seq={}, fd={}, bytesused={}\n", buf.index, buf.sequence,
+        fflush(stdout);
+        fmt::print("DMABUF QBUF: index={}, seq={}, fd={}, bytesused={}\r", buf.index, buf.sequence,
                    buf.m.planes[0].m.fd, buf.m.planes[0].bytesused);
 
         src = wrapbuffer_fd(buffers[buf.index].dmafd, width, height, RK_FORMAT_VYUY_422);
@@ -846,6 +847,10 @@ class Video {
         if (ioctl(vfd, VIDIOC_QBUF, &buf) < 0) {
             LOG(ERROR) << "can not re-enqueue buffer";
         }
+    }
+
+    void mpp_encode() {
+        
     }
 
   private:
