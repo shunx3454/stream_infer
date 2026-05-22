@@ -9,10 +9,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <opencv2/core/hal/interface.h>
 #include <stdexcept>
 
 #include <opencv2/core/mat.hpp>
+#include <opencv2/core/hal/interface.h>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -95,7 +95,7 @@ class Video {
             throw std::invalid_argument("can not open file");
         }
 
-        struct v4l2_capability capcity {};
+        struct v4l2_capability capcity{};
         int ret = ioctl(vfd, VIDIOC_QUERYCAP, &capcity);
         if (ret < 0) {
             perror("VIDIOC_QUERYCAP");
@@ -129,7 +129,7 @@ class Video {
         // V4L2_BUF_TYPE_VIDEO_OUTPUT 视频输出
         // V4L2_BUF_TYPE_VIDEO_CAPTURE 视频输入
         // V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE 视频输入，多平面
-        struct v4l2_fmtdesc fmtdesc {};
+        struct v4l2_fmtdesc fmtdesc{};
         fmtdesc.type = buf_type;
         fmtdesc.index = 0;
         while (ioctl(vfd, VIDIOC_ENUM_FMT, &fmtdesc) == 0) {
@@ -155,8 +155,8 @@ class Video {
         // frame size query
         {
             LOG(INFO) << "Supported frame sizes and frame rates for format type ";
-            struct v4l2_frmsizeenum framesize {};
-            struct v4l2_frmivalenum frame_rate {};
+            struct v4l2_frmsizeenum framesize{};
+            struct v4l2_frmivalenum frame_rate{};
 
             framesize.type = buf_type;
             framesize.pixel_format = V4L2_PIX_FMT_NV12;
@@ -247,7 +247,7 @@ class Video {
 
         // 查看当前格式设置
         LOG(INFO) << "Current format settings:";
-        struct v4l2_format fmt {};
+        struct v4l2_format fmt{};
         fmt.type = buf_type;
         if (ioctl(vfd, VIDIOC_G_FMT, &fmt) < 0) {
             LOG(ERROR) << "can not get format";
@@ -270,7 +270,7 @@ class Video {
 
         // 流信息查询
         LOG(INFO) << "Current stream settings:";
-        struct v4l2_streamparm streamparm {};
+        struct v4l2_streamparm streamparm{};
         streamparm.type = buf_type;
         if ((ret = ioctl(vfd, VIDIOC_G_PARM, &streamparm)) < 0) {
             LOG(ERROR) << "can not get stream info: " << ret;
@@ -288,7 +288,7 @@ class Video {
 
         // 缓冲类型查询
         LOG(INFO) << "Buffer type: " << buf_type;
-        struct v4l2_requestbuffers req {};
+        struct v4l2_requestbuffers req{};
         memset(&req, 0, sizeof(req));
         req.type = buf_type;
         req.memory = V4L2_MEMORY_DMABUF; // 或 USERPTR/DMABUF
@@ -432,7 +432,7 @@ class Video {
         // 设置缓冲区类型并开始采集
         // 1080p NV12
         mem_ = mem_t;
-        struct v4l2_format fmt {};
+        struct v4l2_format fmt{};
         if (isMplane) {
             fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
             fmt.fmt.pix_mp.width = 1920;
@@ -504,7 +504,7 @@ class Video {
         }
 
         if (isTimePerFrameSupported) {
-            struct v4l2_streamparm streamparm {};
+            struct v4l2_streamparm streamparm{};
             memset(&streamparm, 0, sizeof(struct v4l2_streamparm));
             // 设置目标帧率：30fps = 1/30 秒每帧
             streamparm.type = buf_type;
@@ -526,7 +526,7 @@ class Video {
         }
 
         // 请求缓冲区
-        struct v4l2_requestbuffers req {};
+        struct v4l2_requestbuffers req{};
         req.type = buf_type;
         req.count = REQUEST_BUF_COUNT;
         req.memory = mem_ == DMABUF ? V4L2_MEMORY_DMABUF : V4L2_MEMORY_MMAP;
@@ -542,7 +542,7 @@ class Video {
 
         // 如果是MMAP, 查询并进行内存映射
         if (mem_ == mem_type::MMAP) {
-            struct v4l2_buffer buf {};
+            struct v4l2_buffer buf{};
             buf.type = buf_type;
             buf.type = V4L2_MEMORY_MMAP;
 
@@ -609,7 +609,7 @@ class Video {
             // 查询 DMABUF
 
             // DMA fd 加入队列
-            struct v4l2_buffer buf {};
+            struct v4l2_buffer buf{};
             buf.type = buf_type;
             buf.memory = V4L2_MEMORY_DMABUF;
 
@@ -809,9 +809,7 @@ class Video {
         struct v4l2_buffer buf;
         memset(&buf, 0, sizeof(struct v4l2_buffer));
 
-        buf.type =
-
-            buf.type = buf_type;
+        buf.type = buf_type;
         buf.memory = V4L2_MEMORY_MMAP;
         if (isMplane) {
             buf.m.planes = planes;
@@ -849,9 +847,7 @@ class Video {
         }
     }
 
-    void mpp_encode() {
-        
-    }
+    void mpp_encode() {}
 
   private:
     /*

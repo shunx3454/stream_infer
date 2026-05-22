@@ -29,6 +29,9 @@ add_executable(${PROJECT_NAME}
     preprocess.cpp
     dma_alloc.cpp
     utils.cpp
+    mpp_enc.cpp
+    dmabuf.cpp
+    rtsp.cpp
 )
 
 include_directories(${PROJECT_NAME}

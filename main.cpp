@@ -35,8 +35,8 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv4/opencv2/opencv.hpp>
 
+#include "mpp_enc.h"
 #include "v4l_cap.hpp"
-#include "mpp_codec.hpp"
 
 #include <rknn_api.h>
 
@@ -47,6 +47,8 @@
 #include "postprocess.h"
 #include "preprocess.h"
 #include "utils.h"
+
+#include "dmabuf.h"
 
 #define W_ALIGN 16
 #define H_ALIGN 2
@@ -64,6 +66,82 @@ static std::vector<uchar> read_file(const std::string &path) {
     std::vector<uchar> data(size);
     ifs.read(reinterpret_cast<char *>(data.data()), size);
     return data;
+}
+
+static void img_uyvy_save(void *ptr, size_t width, size_t height, size_t x_offset, size_t y_offset, std::string path) {
+    // 将指针转换为 uint8_t 方便进行字节级操作
+    uint8_t *dst = reinterpret_cast<uint8_t *>(ptr);
+
+    // UYVY 格式下，每行的字节跨度 (Stride) 是 宽度 * 2
+    size_t stride = width * 2;
+
+    // 定义棋盘格块的大小
+    const size_t block_size = 100;
+
+    // 预校准红黑两色在 YUV 颜色空间中的 8-bit 数值
+    // 纯黑: Y=16,   U=128, V=128
+    // 纯红: Y=82,   U=90,  V=240  (标准 BT.601 转换公式计算所得)
+    const uint8_t Y_BLACK = 16, U_BLACK = 128, V_BLACK = 128;
+    const uint8_t Y_RED = 82, U_RED = 90, V_RED = 240;
+
+    // 逐行遍历图像 (Y轴)
+    for (size_t y = 0; y < height; ++y) {
+        // 计算当前像素在全局棋盘格系统中的绝对 Y 坐标（加入 Y 轴偏移）
+        size_t global_y = y + y_offset;
+        size_t block_y = global_y / block_size;
+
+        // 获取当前行的内存起始指针
+        uint8_t *row_ptr = dst + (y * stride);
+
+        // 逐对像素遍历图像 (X轴)，每次处理 2 个像素 (Pixel 0 和 Pixel 1)
+        // width 必须为 2 的倍数（由于硬件对齐，1920 / 1088 完美符合）
+        for (size_t x = 0; x < width; x += 2) {
+            // 计算这两个像素在全局棋盘格系统中的绝对 X 坐标
+            size_t global_x0 = x + x_offset;
+            size_t global_x1 = (x + 1) + x_offset;
+
+            size_t block_x0 = global_x0 / block_size;
+            size_t block_x1 = global_x1 / block_size;
+
+            // 决定 Pixel 0 的颜色：(block_x + block_y) 为偶数时为红，奇数为黑
+            bool is_red0 = ((block_x0 + block_y) % 2 == 0);
+            uint8_t y0 = is_red0 ? Y_RED : Y_BLACK;
+            uint8_t u0 = is_red0 ? U_RED : U_BLACK;
+            uint8_t v0 = is_red0 ? V_RED : V_BLACK;
+
+            // 决定 Pixel 1 的颜色
+            bool is_red1 = ((block_x1 + block_y) % 2 == 0);
+            uint8_t y1 = is_red1 ? Y_RED : Y_BLACK;
+            uint8_t u1 = is_red1 ? U_RED : U_BLACK;
+            uint8_t v1 = is_red1 ? V_RED : V_BLACK;
+
+            // 核心：由于 UYVY 两个像素共享一对 UV 分量，我们对两者的色度取平均值值
+            uint8_t u_shared = (u0 + u1) / 2;
+            uint8_t v_shared = (v0 + v1) / 2;
+
+            // 根据 UYVY 内存布局打包填充: [U, Y0, V, Y1]
+            size_t byte_idx = x * 2;
+            row_ptr[byte_idx] = u_shared;     // Byte 0: U
+            row_ptr[byte_idx + 1] = y0;       // Byte 1: Y0
+            row_ptr[byte_idx + 2] = v_shared; // Byte 2: V
+            row_ptr[byte_idx + 3] = y1;       // Byte 3: Y1
+        }
+    }
+
+    // 绘制完成后，使用 OpenCV 零拷贝读取这段 UYVY 内存
+    // UYVY 是 2 通道数据 (CV_8UC2)，传递明确的 stride (每行字节数)
+    cv::Mat uyvy_mat(height, width, CV_8UC2, ptr, stride);
+
+    // 将 UYVY 转换为 OpenCV 常用的 BGR 格式
+    cv::Mat bgr_mat;
+    cv::cvtColor(uyvy_mat, bgr_mat, cv::COLOR_YUV2BGR_UYVY);
+
+    // 写入文件 (支持 .png, .jpg 等)
+    if (cv::imwrite(path, bgr_mat)) {
+        std::cout << "Successfully saved pattern image to: " << path << std::endl;
+    } else {
+        std::cerr << "Failed to write image to: " << path << std::endl;
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -563,9 +641,19 @@ int main(int argc, char *argv[]) {
         // }
         // cv::destroyWindow("capture");
 
-		MppEncoder encoder;
-		encoder.init();
+        MppEncoder encoder;
+        encoder.init();
+        encoder.getHdr();
 
+        DmaBuf frm_dbuf(1920 * 1088 * 2);
+        DmaBuf pkt_dbuf(1920 * 1088 * 2);
+
+        for (int i = 0; i < 30; ++i) {
+            img_uyvy_save(frm_dbuf.getVa(), 1920, 1088, i * 4, i * 4,
+                          "/home/rock/c_cpp/stream_infer/asset/test_" + std::to_string(i) + ".jpg");
+            frm_dbuf.syncCpuToDevice();
+            encoder.encode(frm_dbuf, pkt_dbuf, i == 29 ? 1 : 0);
+        }
     }
 
     // rknn_destroy(ctx);
