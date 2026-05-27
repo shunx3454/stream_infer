@@ -26,6 +26,8 @@
 #include <thread>
 #include <vector>
 
+#include <ctime>
+
 #include <RockchipRga.h>
 #include <im2d.hpp>
 
@@ -36,6 +38,7 @@
 #include <opencv4/opencv2/opencv.hpp>
 
 #include "mpp_enc.h"
+#include "rtsp.h"
 #include "v4l_cap.hpp"
 
 #include <rknn_api.h>
@@ -137,11 +140,11 @@ static void img_uyvy_save(void *ptr, size_t width, size_t height, size_t x_offse
     cv::cvtColor(uyvy_mat, bgr_mat, cv::COLOR_YUV2BGR_UYVY);
 
     // 写入文件 (支持 .png, .jpg 等)
-    if (cv::imwrite(path, bgr_mat)) {
-        std::cout << "Successfully saved pattern image to: " << path << std::endl;
-    } else {
-        std::cerr << "Failed to write image to: " << path << std::endl;
-    }
+    // if (cv::imwrite(path, bgr_mat)) {
+    //     std::cout << "Successfully saved pattern image to: " << path << std::endl;
+    // } else {
+    //     std::cerr << "Failed to write image to: " << path << std::endl;
+    // }
 }
 
 int main(int argc, char *argv[]) {
@@ -643,16 +646,45 @@ int main(int argc, char *argv[]) {
 
         MppEncoder encoder;
         encoder.init();
-        encoder.getHdr();
+        auto hdr = encoder.getHdr();
 
         DmaBuf frm_dbuf(1920 * 1088 * 2);
         DmaBuf pkt_dbuf(1920 * 1088 * 2);
 
-        for (int i = 0; i < 30; ++i) {
-            img_uyvy_save(frm_dbuf.getVa(), 1920, 1088, i * 4, i * 4,
-                          "/home/rock/c_cpp/stream_infer/asset/test_" + std::to_string(i) + ".jpg");
-            frm_dbuf.syncCpuToDevice();
-            encoder.encode(frm_dbuf, pkt_dbuf, i == 29 ? 1 : 0);
+        // rtsp
+        RtspPusher rtsp_client;
+        rtsp_client.init("rtsp://10.110.240.25:8554/test", 1920, 1088, 30, hdr.data(), hdr.size());
+
+        auto ts = std::chrono::steady_clock::now();
+        auto ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ts.time_since_epoch()).count();
+
+        while (true) {
+            for (int i = 0; i < 30; ++i) {
+                auto t1 = std::chrono::steady_clock::now();
+                img_uyvy_save(frm_dbuf.getVa(), 1920, 1088, i * 4, i * 4,
+                              "/home/rock/c_cpp/stream_infer/asset/test_" + std::to_string(i) + ".jpg");
+                auto t2 = std::chrono::steady_clock::now();
+                frm_dbuf.syncCpuToDevice();
+                auto t3 = std::chrono::steady_clock::now();
+
+                std::chrono::_V2::steady_clock::time_point t4, t5;
+                auto pkt_len = encoder.encode(
+                    frm_dbuf, pkt_dbuf, i == 0 ? 1 : 0, 0,
+                    [&rtsp_client, &t4, &t5](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
+                        t4 = std::chrono::steady_clock::now();
+                        rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+                        t5 = std::chrono::steady_clock::now();
+                    });
+
+                fmt::print("t1(new loop)={}, t2(cpu draw yuv ok)={}, t3(sync to dev ok)={}, t4(mpp encode ok)={}, "
+                           "t5(rtsp send ok)={}\n",
+                           std::chrono::duration_cast<std::chrono::milliseconds>(t1.time_since_epoch()).count() - ts_ms,
+                           std::chrono::duration_cast<std::chrono::milliseconds>(t2.time_since_epoch()).count() - ts_ms,
+                           std::chrono::duration_cast<std::chrono::milliseconds>(t3.time_since_epoch()).count() - ts_ms,
+                           std::chrono::duration_cast<std::chrono::milliseconds>(t4.time_since_epoch()).count() - ts_ms,
+                           std::chrono::duration_cast<std::chrono::milliseconds>(t5.time_since_epoch()).count() -
+                               ts_ms);
+            }
         }
     }
 

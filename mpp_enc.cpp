@@ -298,7 +298,8 @@ INIT_FAIL:
     return -1;
 }
 
-int MppEncoder::getHdr() {
+std::vector<uint8_t> MppEncoder::getHdr() {
+    std::vector<u_char> hdr{};
     MPP_RET ret{MPP_OK};
     // Get HDR
     auto uptr = std::make_unique<std::array<char, 512>>();
@@ -306,7 +307,7 @@ int MppEncoder::getHdr() {
     ret = mpp_packet_init(&hdr_pkt, uptr.get()->data(), 512);
     if (ret != MPP_OK) {
         fmt::print("mpp_packet_init error {}\n", ret);
-        return -1;
+        return hdr;
     }
 
     mpp_packet_set_length(hdr_pkt, 0);
@@ -326,20 +327,24 @@ int MppEncoder::getHdr() {
         of.write((const char *)ptr, len);
         auto pe = of.tellp();
         fmt::print("write {} bytes HDR\n", pe - ps);
+
+        hdr = std::vector<u_char>(len);
+        memcpy(hdr.data(), ptr, len);
     }
 
 OUT:
     if (hdr_pkt)
         mpp_packet_deinit(&hdr_pkt);
 
-    return 0;
+    return hdr;
 }
 
-int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 eos) {
+int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos, const EncodedFrameWriter &writer) {
     MPP_RET ret{MPP_OK};
     MppFrame frm{NULL};
     MppPacket pkt{NULL};
     MppBufferInfo info;
+    int pkt_len = -1;
 
     if (!frm_dbuf.isValid()) {
         fmt::print("dma buf error\n");
@@ -357,7 +362,7 @@ int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 eos) {
     ret = mpp_buffer_import(&frm_buf, &info);
     if (ret != MPP_OK) {
         fmt::print("mpp_buffer_import error {}\n", ret);
-        return -1;
+        goto OUT;
     }
     memset(&info, 0, sizeof(MppBufferInfo));
     ret = mpp_buffer_info_get(frm_buf, &info);
@@ -367,7 +372,7 @@ int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 eos) {
     }
     fmt::print("mpp frm buf: fd={}, vaddr={}, size={:#x}, type={:#x}\n", info.fd, info.ptr, info.size, info.type);
 
-    // wrap pkt_dbuf -> pktbuf
+    // wrap pkt_dbuf -> pkt_buf
     memset(&info, 0, sizeof(MppBufferInfo));
     info.index = 0;
     info.fd = pkt_dbuf.getFd();
@@ -399,6 +404,7 @@ int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 eos) {
     mpp_frame_set_ver_stride(frm, ver_stride);
     mpp_frame_set_fmt(frm, fmt_type);
     mpp_frame_set_eos(frm, eos);
+    // link frm_buf
     mpp_frame_set_buffer(frm, frm_buf);
 
     // pkt init
@@ -426,15 +432,17 @@ int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 eos) {
         // write packet to file here
         void *ptr = mpp_packet_get_pos(pkt);
         size_t len = mpp_packet_get_length(pkt);
+        pkt_len = len;
 
         eos = mpp_packet_get_eos(pkt);
 
-        fmt::print("pkt: ptr={}, len={}, eos={} ", ptr, len, eos);
+        fmt::print("pkt: ptr={}, len={}, eos={} \n", ptr, len, eos);
 
-        auto ps = of.tellp();
-        of.write((const char *)ptr, len);
-
-        fmt::print("write {} bytes\n", of.tellp() - ps);
+        // auto ps = of.tellp();
+        // of.write((const char *)ptr, len);
+        // fmt::print("write {} bytes\n", of.tellp() - ps);
+        //pkt_dbuf.syncDeviceToCpu();
+        writer(ptr, len, iskeyFrame, eos);
     }
 
 OUT:
@@ -452,7 +460,7 @@ OUT:
         }
     }
 
-    return -1;
+    return pkt_len;
 }
 
 MppEncoder::~MppEncoder() {

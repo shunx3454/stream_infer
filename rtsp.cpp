@@ -1,7 +1,16 @@
 #include "rtsp.h"
+#include <vector>
 
-int RtspPusher::init(const std::string &rtsp_url, int width, int height, int fps_val,
-                     const uint8_t *sps_pps_buf, size_t sps_pps_len) {
+const char* av_err_str(int ret)
+{
+    static std::vector<char> err_s(64);
+    memset(err_s.data(), 0, err_s.size());
+    av_strerror(ret, err_s.data(), err_s.size());
+    return err_s.data();
+}
+
+int RtspPusher::init(const std::string &rtsp_url, int width, int height, int fps_val, const uint8_t *sps_pps_buf,
+                     size_t sps_pps_len) {
     this->fps = fps_val;
 
     // 1. 创建输出上下文，指定格式为 "rtsp"
@@ -92,6 +101,7 @@ int RtspPusher::push_h264_packet(const uint8_t *data, size_t size, bool is_keyfr
     int ret = av_interleaved_write_frame(fmt_ctx, pkt);
     if (ret < 0) {
         std::cerr << "Error writing frame to RTSP stream" << std::endl;
+        av_log(NULL, AV_LOG_ERROR, "av_interleaved_write_frame ret:%d, %s\n", ret, av_err_str(ret));
     }
 
     frame_index++;

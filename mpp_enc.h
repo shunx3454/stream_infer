@@ -19,6 +19,13 @@
 
 #include "dmabuf.h"
 
+// 定义回调函数的别名
+using EncodedFrameWriter = std::function<void(const void *ptr,    // 编码后的 H264/H265 数据指针
+                                              size_t len,         // 数据长度
+                                              RK_U32 is_keyframe, // 是否为关键帧 (I帧)
+                                              RK_U32 eos          // 是否为最后一帧 (End of Stream)
+                                              )>;
+
 class MppEncoder {
   private:
     MppCtx ctx{NULL};
@@ -50,8 +57,8 @@ class MppEncoder {
     MppEncoder() {}
 
     int init();
-    int encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 eos);
-    int getHdr();
+    int encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos, const EncodedFrameWriter &writer);
+    std::vector<uint8_t> getHdr();
 
     ~MppEncoder();
 };
