@@ -73,6 +73,9 @@ class Video {
     size_t width;
     size_t height;
     size_t frame_size{0};
+    size_t pixelformat;
+    size_t num_planes;
+
     int rga_dst_dma_fd{-1};
     void *rga_dst_buf{NULL};
 
@@ -94,6 +97,7 @@ class Video {
     ~Video() {
         streamoff();
         close(vfd);
+        vfd = -1;
     }
 
     int init(const char *dev);

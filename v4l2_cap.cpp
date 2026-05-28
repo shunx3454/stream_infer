@@ -1,5 +1,16 @@
 #include "v4l2_cap.h"
 
+static char v4l2_pix_type_str[5] = {0};
+
+static const char *v4l2PixFmtStr(unsigned int ifmt) {
+    v4l2_pix_type_str[0] = (char)(ifmt & 0xFF);
+    v4l2_pix_type_str[1] = (char)((ifmt >> 8) & 0xFF);
+    v4l2_pix_type_str[2] = (char)((ifmt >> 16) & 0xFF);
+    v4l2_pix_type_str[3] = (char)((ifmt >> 24) & 0xFF);
+    v4l2_pix_type_str[4] = '\0';
+    return v4l2_pix_type_str;
+}
+
 int Video::init(const char *dev) {
     vfd = open(dev, O_RDWR);
     if (vfd < 0) {
@@ -15,7 +26,7 @@ int Video::init(const char *dev) {
             fmt::print("Open device={} failed, reason={}\n", dev, strerror(errno));
             return -errno;
         }
-        fmt::print("\ndriver: {}\n version: {}\n card: {}\n bus_info: {}\n capabilities: {:#x}\n",
+        fmt::print("\ndriver: {}, version: {}\ncard: {}\nbus_info: {}\ncapabilities: {:#x}\n",
                    (const char *)capcity.driver, capcity.version, (const char *)capcity.card,
                    (const char *)capcity.bus_info, capcity.capabilities);
 
@@ -43,14 +54,14 @@ int Video::init(const char *dev) {
             .index = 0,
             .type = v4l2BufType,
         };
-        fmt::print("Support pixfmt: \n");
+        fmt::print("Support pixfmt: ");
 
         for (;;) {
             if (ioctl(vfd, VIDIOC_ENUM_FMT, &fmtdesc) == 0) {
-                fmt::print("{}, ", (const char *)fmtdesc.description);
                 ++fmtdesc.index;
+                fmt::print("{}, ", (const char *)fmtdesc.description);
             } else {
-                fmt::print("\n");
+                fmt::print("\n\n");
                 break;
             }
         }
@@ -58,59 +69,68 @@ int Video::init(const char *dev) {
 
     // frame size query
     {
-        unsigned int fmt_query_array[] = {V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_NV21, V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_YUV420,
-                                          V4L2_PIX_FMT_YUYV};
+        unsigned int fmt_query_array[] = {V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_NV21,   V4L2_PIX_FMT_MJPEG,
+                                          V4L2_PIX_FMT_JPEG, V4L2_PIX_FMT_YUV420, V4L2_PIX_FMT_YUYV};
         struct v4l2_frmsizeenum framesize{};
         // FMT
         for (int i = 0; i < sizeof(fmt_query_array) / sizeof(fmt_query_array[0]); ++i) {
             framesize.index = 0;
             framesize.pixel_format = fmt_query_array[i];
 
+            fmt::print("Pix_fmt={}, frame size/interval enum:\n", v4l2PixFmtStr(fmt_query_array[i]));
             for (;;) {
+                // FRM SIZE
                 if (ioctl(vfd, VIDIOC_ENUM_FRAMESIZES, &framesize) == 0) {
                     ++framesize.index;
 
-                    // FRM SIZE
-                    if (framesize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
-                        fmt::print("frame discrete size: {}x{}\n", framesize.discrete.width, framesize.discrete.height);
-                    } else if (framesize.type == V4L2_FRMSIZE_TYPE_STEPWISE) {
-                        fmt::print("frame stepwise size: Min={}x{} ~ Max={}x{}, step={}x{}\n",
-                                   framesize.stepwise.min_width, framesize.stepwise.min_height,
-                                   framesize.stepwise.max_width, framesize.stepwise.max_height,
-                                   framesize.stepwise.step_width, framesize.stepwise.step_height);
-                    } else {
-                        fmt::print("frame continus size: Min={}x{} ~ Max={}x{}\n", framesize.stepwise.min_width,
-                                   framesize.stepwise.min_height, framesize.stepwise.max_width,
-                                   framesize.stepwise.max_height);
-                    }
-
-                    //  FRM RATE (FRM MAX SIZE)
                     struct v4l2_frmivalenum frmInterval = {
                         .index = 0,
                         .pixel_format = framesize.pixel_format,
-                        .width = framesize.stepwise.max_width,
-                        .height = framesize.stepwise.max_height,
                     };
 
+                    if (framesize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
+                        fmt::print("\tdiscrete size: {}x{}\n", framesize.discrete.width, framesize.discrete.height);
+                        frmInterval.width = framesize.discrete.width;
+                        frmInterval.height = framesize.discrete.height;
+                    } else if (framesize.type == V4L2_FRMSIZE_TYPE_STEPWISE) {
+                        fmt::print("\tstepwise size: Min={}x{} ~ Max={}x{}, step={}x{}\n", framesize.stepwise.min_width,
+                                   framesize.stepwise.min_height, framesize.stepwise.max_width,
+                                   framesize.stepwise.max_height, framesize.stepwise.step_width,
+                                   framesize.stepwise.step_height);
+                        frmInterval.width = framesize.stepwise.max_width;
+                        frmInterval.height = framesize.stepwise.max_height;
+                    } else if (framesize.type == V4L2_FRMSIZE_TYPE_CONTINUOUS) {
+                        fmt::print("\tcontinus size: Min={}x{} ~ Max={}x{}\n", framesize.stepwise.min_width,
+                                   framesize.stepwise.min_height, framesize.stepwise.max_width,
+                                   framesize.stepwise.max_height);
+                        frmInterval.width = framesize.stepwise.max_width;
+                        frmInterval.height = framesize.stepwise.max_height;
+                    }
+
                     for (;;) {
+                        //  FRM RATE (FRM MAX SIZE)
                         if (ioctl(vfd, VIDIOC_ENUM_FRAMEINTERVALS, &frmInterval) == 0) {
                             ++frmInterval.index;
+
                             if (frmInterval.type == V4L2_FRMIVAL_TYPE_DISCRETE) {
-                                fmt::print("frame discrete interval: {}/{}\n", frmInterval.discrete.numerator,
-                                           frmInterval.discrete.denominator);
+                                fmt::print("\t\tdiscrete interval: {}/{}\n", frmInterval.discrete.denominator,
+                                           frmInterval.discrete.numerator);
                             } else if (frmInterval.type == V4L2_FRMIVAL_TYPE_STEPWISE) {
-                                fmt::print("frame stepwise interval: Min={}/{} ~ Max={}/{}, step={}/{}\n",
-                                           frmInterval.stepwise.min.numerator, frmInterval.stepwise.min.denominator,
-                                           frmInterval.stepwise.max.numerator, frmInterval.stepwise.max.denominator,
-                                           frmInterval.stepwise.step.numerator, frmInterval.stepwise.step.denominator);
-                            } else {
-                                fmt::print("frame continus interval: Min={}/{} ~ Max={}/{}\n",
-                                           frmInterval.stepwise.min.numerator, frmInterval.stepwise.min.denominator,
-                                           frmInterval.stepwise.max.numerator, frmInterval.stepwise.max.denominator);
+                                fmt::print("\t\tstepwise interval: Min={}/{} ~ Max={}/{}, step={}/{}\n",
+                                           frmInterval.stepwise.min.denominator, frmInterval.stepwise.min.numerator,
+                                           frmInterval.stepwise.max.denominator, frmInterval.stepwise.max.numerator,
+                                           frmInterval.stepwise.step.denominator, frmInterval.stepwise.step.numerator);
+                            } else if (frmInterval.type == V4L2_FRMIVAL_TYPE_CONTINUOUS) {
+                                fmt::print("\t\tcontinus interval: Min={}/{} ~ Max={}/{}\n",
+                                           frmInterval.stepwise.min.denominator, frmInterval.stepwise.min.numerator,
+                                           frmInterval.stepwise.max.denominator, frmInterval.stepwise.max.numerator);
                             }
                         } else {
                             break;
                         }
+                    }
+                    if (frmInterval.index == 0) {
+                        fmt::print("  No frame intervals found or format not supported.\n");
                     }
                 } else {
                     break;
@@ -128,7 +148,7 @@ int Video::init(const char *dev) {
         if (ioctl(vfd, VIDIOC_G_FMT, &fmt) == 0) {
             if (isMplane) {
                 fmt::print("Get multiple plane fmt: size={}x{}, pixfmt={}, field={}, colorspace={}, planes={}\n",
-                           +fmt.fmt.pix_mp.width, +fmt.fmt.pix_mp.height, +fmt.fmt.pix_mp.pixelformat,
+                           +fmt.fmt.pix_mp.width, +fmt.fmt.pix_mp.height, v4l2PixFmtStr(+fmt.fmt.pix_mp.pixelformat),
                            +fmt.fmt.pix_mp.field, +fmt.fmt.pix_mp.colorspace, +fmt.fmt.pix_mp.num_planes);
                 for (int i = 0; i < fmt.fmt.pix_mp.num_planes; ++i) {
                     fmt::print("plane {}: bytesperline={}, sizeimage={}\n", i,
@@ -138,8 +158,8 @@ int Video::init(const char *dev) {
             } else {
                 fmt::print("Get single plane fmt: size={}x{}, pixfmt={}, field={}, colorspace={}, bytesperline={}, "
                            "sizeimage={} \n",
-                           fmt.fmt.pix.width, fmt.fmt.pix.height, fmt.fmt.pix.pixelformat, fmt.fmt.pix.field,
-                           fmt.fmt.pix.colorspace, fmt.fmt.pix.bytesperline, fmt.fmt.pix.sizeimage);
+                           fmt.fmt.pix.width, fmt.fmt.pix.height, v4l2PixFmtStr(fmt.fmt.pix.pixelformat),
+                           fmt.fmt.pix.field, fmt.fmt.pix.colorspace, fmt.fmt.pix.bytesperline, fmt.fmt.pix.sizeimage);
             }
             std::cout << "\n";
         } else {
@@ -156,7 +176,7 @@ int Video::init(const char *dev) {
         if (ioctl(vfd, VIDIOC_G_PARM, &streamparm) == 0) {
             fmt::print("Get stream param: capability={:#x}, captrue_mode={}, timeperframe={}/{}, readbuffers={}\n",
                        streamparm.parm.capture.capability, streamparm.parm.capture.capturemode,
-                       streamparm.parm.capture.timeperframe.numerator, streamparm.parm.capture.timeperframe.denominator,
+                       streamparm.parm.capture.timeperframe.denominator, streamparm.parm.capture.timeperframe.numerator,
                        streamparm.parm.capture.readbuffers);
         } else {
             fmt::print("VIDIOC_G_PARM failed, reason={}\n", strerror(errno));
@@ -192,6 +212,7 @@ int Video::init(const char *dev) {
             fmt::print("VIDIOC_REQBUFS failed, reason={}\n", strerror(errno));
             return -errno;
         }
+        std::cout << "\n";
     }
 
     return 0;
@@ -203,33 +224,46 @@ int Video::streamon_mp_dmabuf(std::vector<DmaBuf> &dbufs) {
     fmt_ = NV12;
 
     // 设置颜色格式
-    struct v4l2_format fmt;
-    memset(&fmt, 0, sizeof(struct v4l2_format));
+    struct v4l2_format fmt = {
+        .type = v4l2BufType,
+        .fmt =
+            {
+                .pix_mp =
+                    {
+                        .width = 1920,
+                        .height = 1088,
+                        .pixelformat = V4L2_PIX_FMT_UYVY,
+                        .field = V4L2_FIELD_NONE,
+                        .colorspace = V4L2_COLORSPACE_SRGB,
+                        .plane_fmt =
+                            {
+                                [0] =
+                                    {
+                                        .sizeimage = 1920 * 1088 * 2,
+                                        .bytesperline = 1920 * 2,
+                                    },
+                            },
+                    },
+            },
+    };
 
-    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    fmt.fmt.pix_mp.width = 1920;
-    fmt.fmt.pix_mp.height = 1088;
-    fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_UYVY;
-    fmt.fmt.pix_mp.num_planes = 1;
-    fmt.fmt.pix_mp.plane_fmt[0].bytesperline = 1920 * 2;
-    fmt.fmt.pix_mp.plane_fmt[0].sizeimage = 1920 * 1088 * 2;
-    fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
     if (ioctl(vfd, VIDIOC_S_FMT, &fmt) < 0) {
-        perror("VIDIOC_S_FMT");
-        return -1;
+        fmt::print("VIDIOC_S_FMT failed, reason={}\n", strerror(errno));
+        return -errno;
     }
 
     memset(&fmt, 0, sizeof(struct v4l2_format));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+
     if (ioctl(vfd, VIDIOC_G_FMT, &fmt) < 0) {
-        perror("VIDIOC_G_FMT");
-        return -1;
+        fmt::print("VIDIOC_G_FMT failed, reason={}\n", strerror(errno));
+        return -errno;
     }
     height = fmt.fmt.pix_mp.height;
     width = fmt.fmt.pix_mp.width;
     frame_size = fmt.fmt.pix_mp.plane_fmt[0].sizeimage;
-    int pixelformat = fmt.fmt.pix_mp.pixelformat;
-    int num_planes = fmt.fmt.pix_mp.num_planes;
+    pixelformat = fmt.fmt.pix_mp.pixelformat;
+    num_planes = fmt.fmt.pix_mp.num_planes;
     fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={} frame_size={}\n", fmt.type, width,
                height, pixelformat, num_planes, frame_size);
 
@@ -241,8 +275,8 @@ int Video::streamon_mp_dmabuf(std::vector<DmaBuf> &dbufs) {
         .memory = V4L2_MEMORY_DMABUF,
     };
     if (ioctl(vfd, VIDIOC_REQBUFS, &req) < 0) {
-        perror("VIDIOC_REQBUFS");
-        return -1;
+        fmt::print("VIDIOC_REQBUFS failed, reason={}\n", strerror(errno));
+        return -errno;
     }
     if (req.count < req_num) {
         fmt::print("get buffers less than req\n");
@@ -250,7 +284,7 @@ int Video::streamon_mp_dmabuf(std::vector<DmaBuf> &dbufs) {
     }
     fmt::print("Allocated {} buffers\n", req.count);
 
-    // 申请DMABUF
+    // 保存DMABUF资源
     buffers = std::vector<Buffer>(dbufs.size());
     DBufs = std::vector<DmaBuf>(dbufs.size());
 
@@ -285,28 +319,18 @@ int Video::streamon_mp_dmabuf(std::vector<DmaBuf> &dbufs) {
         buf.m.planes[0].m.fd = DBufs[i].getFd();
         buf.m.planes[0].length = DBufs[i].getSize();
 
-        int ret = ioctl(vfd, VIDIOC_QBUF, &buf);
-        if (ret < 0) {
-            perror("VIDIOC_QBUF");
-            return -1;
+        if (ioctl(vfd, VIDIOC_QBUF, &buf) < 0) {
+            fmt::print("VIDIOC_QBUF failed, reason={}\n", strerror(errno));
+            return -errno;
         }
     }
 
-    // 申请 RGA DMABUF
-    // int rga_dst_buf_size = height * width * 3;
-    // ret = dma_buf_alloc("/dev/dma_heap/cma", rga_dst_buf_size, &rga_dst_dma_fd, (void **)&rga_dst_buf);
-    // if (ret < 0) {
-    //     printf("alloc src dma_heap buffer failed!\n");
-    //     return -1;
-    // }
-    // dst = wrapbuffer_fd(rga_dst_dma_fd, width, height, RK_FORMAT_RGB_888);
-
     // 启动采集
     if (ioctl(vfd, VIDIOC_STREAMON, &v4l2BufType) < 0) {
-        LOG(ERROR) << "can not start streaming";
-        return -1;
+        fmt::print("VIDIOC_STREAMON failed, reason={}\n", strerror(errno));
+        return -errno;
     }
-    LOG(INFO) << "streaming started";
+    fmt::print("#### Stream on ####\n");
     isCapturing = true;
 
     return 0;
@@ -315,9 +339,10 @@ int Video::streamon_mp_dmabuf(std::vector<DmaBuf> &dbufs) {
 void Video::streamoff() {
     if (isCapturing) {
         if (ioctl(vfd, VIDIOC_STREAMOFF, &v4l2BufType) < 0) {
-            LOG(ERROR) << "can not stop streaming";
+            fmt::print("VIDIOC_STREAMON failed, reason={}\n", strerror(errno));
+            return;
         }
-        LOG(INFO) << "streaming stopped";
+        fmt::print("#### Stream off ####\n");
     }
 
     // 清除buffer
@@ -326,27 +351,8 @@ void Video::streamoff() {
     req.count = 0;
     req.memory = mem_ == DMABUF ? V4L2_MEMORY_DMABUF : V4L2_MEMORY_MMAP;
     if (ioctl(vfd, VIDIOC_REQBUFS, &req) < 0) {
-        LOG(ERROR) << "can not 0 request buffers";
-    }
-
-    // mnumap的缓冲区不需要手动释放，关闭设备时会自动释放
-    if (mem_ == MMAP) {
-        for (int i = 0; i < REQUEST_BUF_COUNT; i++) {
-            if (buffers[i].vaddr != MAP_FAILED) {
-                munmap(buffers[i].vaddr, buffers[i].length);
-                LOG(INFO) << "MMAP Buffer " << i << " unmapped";
-            }
-        }
-    }
-
-    if (mem_ == DMABUF) {
-        for (int i = 0; i < REQUEST_BUF_COUNT; ++i) {
-            if (buffers[i].vaddr != MAP_FAILED) {
-                dma_buf_free(buffers[i].length, buffers[i].dmafd, buffers[i].vaddr);
-                fmt::print("DMABUF buffer: index={}, fd={}, vaddr={}, length={} unmapped\n", i, buffers[i].dmafd,
-                           buffers[i].vaddr, buffers[i].length);
-            }
-        }
+        fmt::print("VIDIOC_REQBUFS failed, reason={}\n", strerror(errno));
+        return;
     }
 }
 
