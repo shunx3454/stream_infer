@@ -32,6 +32,7 @@ add_executable(${PROJECT_NAME}
     mpp_enc.cpp
     dmabuf.cpp
     rtsp.cpp
+    v4l2_cap.cpp
 )
 
 include_directories(${PROJECT_NAME}

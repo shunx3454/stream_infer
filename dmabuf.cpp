@@ -1,10 +1,10 @@
 #include "dmabuf.h"
-#include <utility> // std::swap
 #include <stdexcept>
+#include <utility> // std::swap
 
 DmaBuf::DmaBuf() : fd_(-1), va_(nullptr), size_(0) {}
 
-DmaBuf::DmaBuf(size_t size, const char* heap_path) {
+DmaBuf::DmaBuf(size_t size, const char *heap_path) {
     if (size == 0) {
         throw std::invalid_argument("DmaBuf size cannot be 0");
     }
@@ -16,12 +16,10 @@ DmaBuf::DmaBuf(size_t size, const char* heap_path) {
     size_ = size;
 }
 
-DmaBuf::~DmaBuf() {
-    free();
-}
+DmaBuf::~DmaBuf() { free(); }
 
 // 移动构造函数：接管另一个对象的资源
-DmaBuf::DmaBuf(DmaBuf&& other) noexcept {
+DmaBuf::DmaBuf(DmaBuf &&other) noexcept {
     fd_ = other.fd_;
     va_ = other.va_;
     size_ = other.size_;
@@ -33,7 +31,7 @@ DmaBuf::DmaBuf(DmaBuf&& other) noexcept {
 }
 
 // 移动赋值运算符
-DmaBuf& DmaBuf::operator=(DmaBuf&& other) noexcept {
+DmaBuf &DmaBuf::operator=(DmaBuf &&other) noexcept {
     if (this != &other) {
         free(); // 先释放自己原本持有的资源
 
@@ -58,11 +56,13 @@ void DmaBuf::free() {
 }
 
 int DmaBuf::syncDeviceToCpu() const {
-    if (!isValid()) return -1;
+    if (!isValid())
+        return -1;
     return dma_sync_device_to_cpu(fd_);
 }
 
 int DmaBuf::syncCpuToDevice() const {
-    if (!isValid()) return -1;
+    if (!isValid())
+        return -1;
     return dma_sync_cpu_to_device(fd_);
 }

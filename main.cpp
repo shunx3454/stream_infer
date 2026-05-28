@@ -11,13 +11,13 @@
 #include <linux/dma-heap.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
-#include <im2d_type.h>
 #include <iostream>
 #include <memory>
 #include <ostream>
@@ -30,6 +30,7 @@
 
 #include <RockchipRga.h>
 #include <im2d.hpp>
+#include <im2d_type.h>
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui.hpp>
@@ -39,7 +40,7 @@
 
 #include "mpp_enc.h"
 #include "rtsp.h"
-#include "v4l_cap.hpp"
+#include "v4l2_cap.h"
 
 #include <rknn_api.h>
 
@@ -55,6 +56,12 @@
 
 #define W_ALIGN 16
 #define H_ALIGN 2
+
+inline int64_t get_now_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts); // 硬件单调时钟，不受系统改时间影响
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 static std::vector<uchar> read_file(const std::string &path) {
     std::ifstream ifs(path, std::ios::binary);
@@ -626,14 +633,29 @@ int main(int argc, char *argv[]) {
 #endif
 
     {
-        std::string device_name = "/dev/video11";
+        std::string device_name = "/dev/video21";
         if (argc > 1) {
             device_name = argv[1];
         }
 
-        // Video video;
-        // video.init(device_name.c_str());
-        // video.streamon_mp_dmabuf();
+        // std::vector<DmaBuf> dbufs;
+        // dbufs.emplace_back(1920 * 1088 * 2);
+        // dbufs.emplace_back(1920 * 1088 * 2);
+        // dbufs.emplace_back(1920 * 1088 * 2);
+        // dbufs.emplace_back(1920 * 1088 * 2);
+
+        Video video;
+        video.init(device_name.c_str());
+        // video.streamon_mp_dmabuf(dbufs);
+
+        /*         auto ts = get_now_ms();
+                while (true) {
+                    auto te = get_now_ms();
+                    auto dbuf = video.cap_frame_get();
+                    fmt::print("dmabuf get: ts={} ms, df={}, vaddr={}, size={}\n", te - ts, dbuf.getFd(), dbuf.getVa(),
+                               dbuf.getSize());
+                    video.cap_frame_put(std::move(dbuf));
+                } */
 
         // cv::namedWindow("capture", cv::WINDOW_NORMAL);
         // while (1) {
@@ -644,48 +666,49 @@ int main(int argc, char *argv[]) {
         // }
         // cv::destroyWindow("capture");
 
-        MppEncoder encoder;
-        encoder.init();
-        auto hdr = encoder.getHdr();
+        //     MppEncoder encoder;
+        //     encoder.init();
+        //     auto hdr = encoder.getHdr();
 
-        DmaBuf frm_dbuf(1920 * 1088 * 2);
-        DmaBuf pkt_dbuf(1920 * 1088 * 2);
+        //     DmaBuf pkt_dbuf(1920 * 1088 * 2);
 
-        // rtsp
-        RtspPusher rtsp_client;
-        rtsp_client.init("rtsp://10.110.240.25:8554/test", 1920, 1088, 30, hdr.data(), hdr.size());
+        //     // rtsp
+        //     RtspPusher rtsp_client;
+        //     rtsp_client.init("rtsp://10.110.240.25:8554/test", 1920, 1088, 30, hdr.data(), hdr.size());
 
-        auto ts = std::chrono::steady_clock::now();
-        auto ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ts.time_since_epoch()).count();
+        //     auto ts = get_now_ms();
 
-        while (true) {
-            for (int i = 0; i < 30; ++i) {
-                auto t1 = std::chrono::steady_clock::now();
-                img_uyvy_save(frm_dbuf.getVa(), 1920, 1088, i * 4, i * 4,
-                              "/home/rock/c_cpp/stream_infer/asset/test_" + std::to_string(i) + ".jpg");
-                auto t2 = std::chrono::steady_clock::now();
-                frm_dbuf.syncCpuToDevice();
-                auto t3 = std::chrono::steady_clock::now();
+        //     while (true) {
+        //         for (int i = 0; i < 30; ++i) {
+        //             auto t1 = get_now_ms();
+        //             // img_uyvy_save(frm_dbuf.getVa(), 1920, 1088, i * 4, i * 4,
+        //             //               "/home/rock/c_cpp/stream_infer/asset/test_" + std::to_string(i) + ".jpg");
+        //             auto frm_dbuf = video.cap_frame_get();
 
-                std::chrono::_V2::steady_clock::time_point t4, t5;
-                auto pkt_len = encoder.encode(
-                    frm_dbuf, pkt_dbuf, i == 0 ? 1 : 0, 0,
-                    [&rtsp_client, &t4, &t5](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
-                        t4 = std::chrono::steady_clock::now();
-                        rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
-                        t5 = std::chrono::steady_clock::now();
-                    });
+        //             auto t2 = get_now_ms();
 
-                fmt::print("t1(new loop)={}, t2(cpu draw yuv ok)={}, t3(sync to dev ok)={}, t4(mpp encode ok)={}, "
-                           "t5(rtsp send ok)={}\n",
-                           std::chrono::duration_cast<std::chrono::milliseconds>(t1.time_since_epoch()).count() - ts_ms,
-                           std::chrono::duration_cast<std::chrono::milliseconds>(t2.time_since_epoch()).count() - ts_ms,
-                           std::chrono::duration_cast<std::chrono::milliseconds>(t3.time_since_epoch()).count() - ts_ms,
-                           std::chrono::duration_cast<std::chrono::milliseconds>(t4.time_since_epoch()).count() - ts_ms,
-                           std::chrono::duration_cast<std::chrono::milliseconds>(t5.time_since_epoch()).count() -
-                               ts_ms);
-            }
-        }
+        // 			// rknn infer frame
+
+        // 			// rga draw frame
+
+        // 			// mpp encode frame
+        //             int64_t t3, t4;
+        //             auto pkt_len = encoder.encode(
+        //                 frm_dbuf, pkt_dbuf, i == 0 ? 1 : 0, 0,
+        //                 [&rtsp_client, &t3, &t4](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
+        //                     t3 = get_now_ms();
+        //                     rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+        //                     t4 = get_now_ms();
+        //                 });
+
+        //             video.cap_frame_put(std::move(frm_dbuf));
+        // 			std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+        //             fmt::print("t1(new loop)={}, t2(v4l2 frame ok)={}, t3(mpp encode ok)={}, "
+        //                        "t4(rtsp send ok)={}\n",
+        //                        t1 - ts, t2 - ts, t3 - ts, t4 - ts);
+        //         }
+        //     }
     }
 
     // rknn_destroy(ctx);
