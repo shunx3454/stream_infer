@@ -72,11 +72,11 @@ int MppEncoder::init() {
         mpp_enc_cfg_set_s32(cfg, "codec:type", enc_type);
         // resolution
         /* setup preprocess parameters */
-        mpp_enc_cfg_set_s32(cfg, "prep:width", width);
-        mpp_enc_cfg_set_s32(cfg, "prep:height", height);
-        mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", hor_stride);
-        mpp_enc_cfg_set_s32(cfg, "prep:ver_stride", ver_stride);
-        mpp_enc_cfg_set_s32(cfg, "prep:format", fmt_type);
+        mpp_enc_cfg_set_s32(cfg, "prep:width", width_);
+        mpp_enc_cfg_set_s32(cfg, "prep:height", height_);
+        mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", hor_stride_);
+        mpp_enc_cfg_set_s32(cfg, "prep:ver_stride", ver_stride_);
+        mpp_enc_cfg_set_s32(cfg, "prep:format", pixfmt_);
         // mpp_enc_cfg_set_s32(cfg, "prep:range", MPP_FRAME_RANGE_JPEG);
 
         // /* setup rate control parameters */
@@ -115,18 +115,18 @@ int MppEncoder::init() {
 
         //  fps
         mpp_enc_cfg_set_s32(cfg, "rc:fps_in_flex", 1);
-        mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps);
+        mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps_);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_in_denom", 1);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_out_flex", 1);
-        mpp_enc_cfg_set_s32(cfg, "rc:fps_out_num", fps);
+        mpp_enc_cfg_set_s32(cfg, "rc:fps_out_num", fps_);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_out_denom", 1);
         // bps
-        mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps);
+        mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps_);
         /* default use CBR mode */
-        mpp_enc_cfg_set_s32(cfg, "rc:bps_max", bps * 2);
-        mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps / 2);
+        mpp_enc_cfg_set_s32(cfg, "rc:bps_max", bps_ * 2);
+        mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps_ / 2);
         // gop
-        mpp_enc_cfg_set_s32(cfg, "rc:gop", gop);
+        mpp_enc_cfg_set_s32(cfg, "rc:gop", gop_);
 
         // qp
         mpp_enc_cfg_set_s32(cfg, "rc:qp_init", -1);
@@ -339,57 +339,96 @@ OUT:
     return hdr;
 }
 
-int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos, const EncodedFrameWriter &writer) {
+int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos) {
+    return this->encode(frm_dbuf, pkt_dbuf, iskeyFrame, eos, [this](const void *ptr, size_t len, RK_U32 iskey, RK_U32 eos) {
+        of.write((const char *)ptr, len);
+        if (eos)
+            of.close();
+    });
+}
+
+int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos,
+                       const EncodedFrameWriter &writer) {
     MPP_RET ret{MPP_OK};
+    MppBufferInfo info;
+
+    MppBuffer frm_buf;
+    MppBuffer pkt_buf;
     MppFrame frm{NULL};
     MppPacket pkt{NULL};
-    MppBufferInfo info;
     int pkt_len = -1;
 
-    if (!frm_dbuf.isValid()) {
-        fmt::print("dma buf error\n");
-        return -1;
-    }
-    fmt::print("raw frm_dbuf: fd={}, addr={}, size={:#x}\n", frm_dbuf.getFd(), frm_dbuf.getVa(), frm_dbuf.getSize());
-    fmt::print("raw pkt_dbuf: fd={}, addr={}, size={:#x}\n", pkt_dbuf.getFd(), pkt_dbuf.getVa(), pkt_dbuf.getSize());
+    if (frm_dbuf) {
+        auto it = MppBufferMap.find(frm_dbuf->getFd());
+        if (it == MppBufferMap.end()) {
+            fmt::print("raw frm_dbuf: fd={}, addr={}, size={:#x}\n", frm_dbuf->getFd(), frm_dbuf->getVa(),
+                       frm_dbuf->getSize());
 
-    // wrap frm_dbuf -> frm_buf
-    memset(&info, 0, sizeof(MppBufferInfo));
-    info.index = 0;
-    info.fd = frm_dbuf.getFd();
-    info.size = frm_dbuf.getSize();
-    info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG);
-    ret = mpp_buffer_import(&frm_buf, &info);
-    if (ret != MPP_OK) {
-        fmt::print("mpp_buffer_import error {}\n", ret);
-        goto OUT;
-    }
-    memset(&info, 0, sizeof(MppBufferInfo));
-    ret = mpp_buffer_info_get(frm_buf, &info);
-    if (ret != MPP_OK) {
-        fmt::print("mpp_buffer_info_get error {}\n", ret);
-        goto OUT;
-    }
-    fmt::print("mpp frm buf: fd={}, vaddr={}, size={:#x}, type={:#x}\n", info.fd, info.ptr, info.size, info.type);
+            // wrap frm_dbuf -> frm_buf
+            memset(&info, 0, sizeof(MppBufferInfo));
+            info.index = n_buffers++;
+            info.fd = frm_dbuf->getFd();
+            info.size = frm_dbuf->getSize();
+            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG);
+            ret = mpp_buffer_import(&frm_buf, &info);
+            if (ret != MPP_OK) {
+                fmt::print("mpp_buffer_import error {}\n", ret);
+                goto OUT;
+            }
 
-    // wrap pkt_dbuf -> pkt_buf
-    memset(&info, 0, sizeof(MppBufferInfo));
-    info.index = 0;
-    info.fd = pkt_dbuf.getFd();
-    info.size = pkt_dbuf.getSize();
-    info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG);
-    ret = mpp_buffer_import(&pkt_buf, &info);
-    if (ret != MPP_OK) {
-        fmt::print("mpp_buffer_import error {}\n", ret);
-        return -1;
-    }
-    memset(&info, 0, sizeof(MppBufferInfo));
-    ret = mpp_buffer_info_get(pkt_buf, &info);
-    if (ret != MPP_OK) {
-        fmt::print("mpp_buffer_info_get error {}\n", ret);
+            memset(&info, 0, sizeof(MppBufferInfo));
+            ret = mpp_buffer_info_get(frm_buf, &info);
+            if (ret != MPP_OK) {
+                fmt::print("mpp_buffer_info_get error {}\n", ret);
+                goto OUT;
+            }
+            fmt::print("mpp frm buf: index={}, fd={}, vaddr={}, size={:#x}, type={:#x}\n", info.index, info.fd,
+                       info.ptr, info.size, info.type);
+
+            MppBufferMap.emplace(info.fd, frm_buf);
+        } else {
+            frm_buf = it->second;
+        }
+    } else {
+        fmt::print("frm_dbuf is NULL\n");
         goto OUT;
     }
-    fmt::print("mpp pkt buf: fd={}, vaddr={}, size={:#x}, type={:#x}\n", info.fd, info.ptr, info.size, info.type);
+
+    if (pkt_dbuf) {
+        auto it = MppBufferMap.find(pkt_dbuf->getFd());
+        if (it == MppBufferMap.end()) {
+            fmt::print("raw pkt_dbuf: fd={}, addr={}, size={:#x}\n", pkt_dbuf->getFd(), pkt_dbuf->getVa(),
+                       pkt_dbuf->getSize());
+
+            // wrap pkt_dbuf -> pkt_buf
+            memset(&info, 0, sizeof(MppBufferInfo));
+            info.index = n_buffers++;
+            info.fd = pkt_dbuf->getFd();
+            info.size = pkt_dbuf->getSize();
+            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG);
+            ret = mpp_buffer_import(&pkt_buf, &info);
+            if (ret != MPP_OK) {
+                fmt::print("mpp_buffer_import error {}\n", ret);
+                return -1;
+            }
+
+            memset(&info, 0, sizeof(MppBufferInfo));
+            ret = mpp_buffer_info_get(pkt_buf, &info);
+            if (ret != MPP_OK) {
+                fmt::print("mpp_buffer_info_get error {}\n", ret);
+                goto OUT;
+            }
+            fmt::print("mpp pkt buf: index={}, fd={}, vaddr={}, size={:#x}, type={:#x}\n", info.index, info.fd,
+                       info.ptr, info.size, info.type);
+
+            MppBufferMap.emplace(info.fd, pkt_buf);
+        } else {
+            pkt_buf = it->second;
+        }
+    } else {
+        fmt::print("frm_dbuf is NULL\n");
+        goto OUT;
+    }
 
     // frame <- buffer
     ret = mpp_frame_init(&frm);
@@ -398,11 +437,11 @@ int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 iskeyFrame, RK
         goto OUT;
     }
 
-    mpp_frame_set_width(frm, width);
-    mpp_frame_set_height(frm, height);
-    mpp_frame_set_hor_stride(frm, hor_stride);
-    mpp_frame_set_ver_stride(frm, ver_stride);
-    mpp_frame_set_fmt(frm, fmt_type);
+    mpp_frame_set_width(frm, width_);
+    mpp_frame_set_height(frm, height_);
+    mpp_frame_set_hor_stride(frm, hor_stride_);
+    mpp_frame_set_ver_stride(frm, ver_stride_);
+    mpp_frame_set_fmt(frm, pixfmt_);
     mpp_frame_set_eos(frm, eos);
     // link frm_buf
     mpp_frame_set_buffer(frm, frm_buf);
@@ -438,10 +477,7 @@ int MppEncoder::encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 iskeyFrame, RK
 
         fmt::print("pkt: ptr={}, len={}, eos={} \n", ptr, len, eos);
 
-        // auto ps = of.tellp();
-        // of.write((const char *)ptr, len);
-        // fmt::print("write {} bytes\n", of.tellp() - ps);
-        //pkt_dbuf.syncDeviceToCpu();
+        pkt_dbuf->syncDeviceToCpu();
         writer(ptr, len, iskeyFrame, eos);
     }
 
@@ -463,7 +499,22 @@ OUT:
     return pkt_len;
 }
 
+MppEncoder::MppEncoder(RK_U32 w, RK_U32 h, MppFrameFormat pixfmt, RK_U32 w_stride, RK_U32 h_stride, RK_U32 fps,
+                       RK_U32 gop)
+    : width_(w), height_(h), pixfmt_(pixfmt), hor_stride_(w_stride), ver_stride_(h_stride), fps_(fps), gop_(gop)
+
+{}
+
 MppEncoder::~MppEncoder() {
+    for (auto &e : MppBufferMap) {
+        if (e.second != NULL) {
+            auto ret = mpp_buffer_put(e.second);
+            if (ret != MPP_OK) {
+                fmt::print("mpp_buffer_put error: {}\n", ret);
+            }
+        }
+    }
+
     if (cfg) {
         MPP_RET ret = mpp_enc_cfg_deinit(cfg);
         if (ret) {

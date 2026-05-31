@@ -33,6 +33,7 @@ add_executable(${PROJECT_NAME}
     dmabuf.cpp
     rtsp.cpp
     v4l2_cap.cpp
+    img_dmabuf.cpp
 )
 
 include_directories(${PROJECT_NAME}
@@ -56,11 +57,11 @@ target_link_libraries(${PROJECT_NAME}
 
 # 内存检测选项
 target_compile_options(${PROJECT_NAME} PRIVATE
-    -fsanitize=address
-    -fno-omit-frame-pointer
+    #-fsanitize=address
+    #-fno-omit-frame-pointer
     -g
 )
 
 target_link_options(${PROJECT_NAME} PRIVATE
-    -fsanitize=address
+    #-fsanitize=address
 )

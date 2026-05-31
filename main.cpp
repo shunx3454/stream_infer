@@ -14,12 +14,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -633,20 +635,129 @@ int main(int argc, char *argv[]) {
 #endif
 
     {
+        int w = 1920;
+        int h = 1088;
+        int w_s = w * 2;
+        int h_s = h;
+        int fps = 30;
+        int gop = 30;
+
+        // int w = 1280;
+        // int h = 720;
+        // int w_s = w * 2;
+        // int h_s = h;
+        // int fps = 10;
+        // int gop = 10;
+
         std::string device_name = "/dev/video21";
         if (argc > 1) {
             device_name = argv[1];
         }
 
-        // std::vector<DmaBuf> dbufs;
-        // dbufs.emplace_back(1920 * 1088 * 2);
-        // dbufs.emplace_back(1920 * 1088 * 2);
-        // dbufs.emplace_back(1920 * 1088 * 2);
-        // dbufs.emplace_back(1920 * 1088 * 2);
+        ImgDMABufPool Pool(4, w, h, w_s, h_s, V4L2_PIX_FMT_UYVY);
+        // ImgDMABufPool Pool(4, w, h, w_s, h_s, V4L2_PIX_FMT_YUYV);
 
         Video video;
         video.init(device_name.c_str());
-        // video.streamon_mp_dmabuf(dbufs);
+        video.streamon(4);
+
+        // mpp
+        MppEncoder encoder(w, h, MPP_FMT_YUV422_UYVY, w_s, h_s, fps, gop);
+        encoder.init();
+        auto hdr = encoder.getHdr();
+
+        // rtsp
+        DmaBuf pktDbuf(w_s * h_s);
+        DmaBuf frmDbuf(w_s * h_s);
+        // RtspPusher rtsp_client;
+        // rtsp_client.init("rtsp://192.168.137.1:8554/test", w, h, fps, hdr.data(), hdr.size());
+
+        // int i = 0;
+        // for (;;) {
+        //     img_uyvy_save(frmDbuf.getVa(), 1920, 1088, i * 4, i * 4, "");
+        //     frmDbuf.syncCpuToDevice();
+        //     encoder.encode(frmDbuf, pktDbuf, i == 0 ? 1 : 0, i == 29 ? 1 : 0);
+        //     std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        //     ++i;
+        //     if (i == 29)
+        //         break;
+        // }
+
+        std::atomic<bool> exited = false;
+        video.cap_frame_put(Pool.get(exited));
+        video.cap_frame_put(Pool.get(exited));
+        video.cap_frame_put(Pool.get(exited));
+        video.cap_frame_put(Pool.get(exited));
+
+        int i = 0;
+        for (;;) {
+            auto dbuf = video.cap_frame_get();
+            fmt::print("Get video dmabuf: ref={}, index={}, fd={}, size={}\n", dbuf.use_count(), dbuf->getIndex(),
+                       dbuf->getFd(), dbuf->getSize());
+
+            encoder.encode(dbuf.get(), &pktDbuf, (i % fps) == 0 ? 1 : 0, 0,
+                           [](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
+                               // t3 = get_now_ms();
+                               // rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+                               // t4 = get_now_ms();
+                           });
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            video.cap_frame_put(dbuf);
+
+            i++;
+            if (i == 1000 * fps)
+                break;
+        }
+
+        /*
+                std::thread t1([&Pool, &video, &exited]() {
+    while (!exited.load()) {
+        video.cap_frame_put(Pool.get(exited));
+    }
+});
+std::thread t2([&Pool, &video, &encoder, &pktDbuf, &rtsp_client, &fps, &exited]() {
+    int i = 0;
+    for (;;) {
+        auto dbuf = video.cap_frame_get();
+        fmt::print("Get video dmabuf: index={}, fd={}, size={}\n", dbuf.getIndex(), dbuf.getFd(),
+                   dbuf.getSize());
+
+        // encoder.encode(dbuf, pktDbuf, (i % fps) == 0 ? 1 : 0, i == 10 * fps ? 1 : 0
+        //                // ,
+        //                //            [&rtsp_client, &pktDbuf](const void *ptr, size_t len, RK_U32
+        //                is_keyframe,
+        //                //            RK_U32 eos) {
+        //                //                // t3 = get_now_ms();
+        //                //                pktDbuf.syncDeviceToCpu();
+        //                //                rtsp_client.push_h264_packet((const uint8_t *)ptr, len,
+        //                is_keyframe);
+        //                //                // t4 = get_now_ms();
+        //                //            }
+        // );
+
+        encoder.encode(dbuf, pktDbuf, (i % fps) == 0 ? 1 : 0, 0,
+                       [&rtsp_client](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
+                           // t3 = get_now_ms();
+                           // rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+                           // t4 = get_now_ms();
+                       });
+
+        // std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+        Pool.put(std::move(dbuf), exited);
+
+        ++i;
+        // if (i == 10 * fps) {
+        // 	exited.store(true);
+        // 	Pool.wakeup();
+        //     break;
+        // }
+    }
+});
+t1.join();
+t2.join();
+        */
 
         /*         auto ts = get_now_ms();
                 while (true) {
@@ -666,15 +777,7 @@ int main(int argc, char *argv[]) {
         // }
         // cv::destroyWindow("capture");
 
-        //     MppEncoder encoder;
-        //     encoder.init();
-        //     auto hdr = encoder.getHdr();
-
         //     DmaBuf pkt_dbuf(1920 * 1088 * 2);
-
-        //     // rtsp
-        //     RtspPusher rtsp_client;
-        //     rtsp_client.init("rtsp://10.110.240.25:8554/test", 1920, 1088, 30, hdr.data(), hdr.size());
 
         //     auto ts = get_now_ms();
 

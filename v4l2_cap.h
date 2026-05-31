@@ -31,6 +31,8 @@
 
 #include "dma_alloc.h"
 #include "dmabuf.h"
+#include "img_dmabuf.h"
+
 #include "im2d_buffer.h"
 #include "im2d_single.h"
 #include <RockchipRga.h>
@@ -41,18 +43,8 @@
 #define MAX_VBLANK 30575
 #define REQUEST_BUF_COUNT 4
 
-struct Buffer {
-    void *vaddr;
-    size_t length;
-    size_t used_len;
-    size_t offset;
-    int dmafd;
-};
-
 class Video {
   public:
-    enum fmt_type { NV12, MJPG };
-    enum mem_type { NONE, MMAP, DMABUF };
 
   private:
     int vfd;
@@ -62,53 +54,28 @@ class Video {
     bool isTimePerFrameSupported;
     enum v4l2_buf_type v4l2BufType;
     enum v4l2_memory mem_type;
-
-    int mp_num{0};
-
-    std::vector<Buffer> buffers;
-    std::vector<DmaBuf> DBufs;
-    std::unordered_map<int, int> fdmapindex;
-    std::unordered_map<int, int> indexmapfd;
-
-    size_t width;
-    size_t height;
-    size_t frame_size{0};
-    size_t pixelformat;
-    size_t num_planes;
-
-    int rga_dst_dma_fd{-1};
-    void *rga_dst_buf{NULL};
-
-    rga_buffer_t src{};
-    rga_buffer_t dst{};
-    rga_buffer_handle_t src_handle{};
-    rga_buffer_handle_t dst_handle{};
-    im_rect src_rect{};
-    im_rect dst_rect{};
-
-    enum fmt_type fmt_ { NV12 };
-    enum mem_type mem_ { NONE };
+    
+    // index:sptr
+    std::unordered_map<unsigned int, std::shared_ptr<ImgDMABuf>> imgdbufs;
+    
+    int width;
+    int height;
+    int frame_size;
+    int pixelformat;
+    int num_planes;
 
   public:
-    Video()
-        : vfd(-1), isMplane(0), isStreaming(0), isCapturing(0), isTimePerFrameSupported(0),
-          v4l2BufType(V4L2_BUF_TYPE_VIDEO_CAPTURE), width(0), height(0), fmt_(fmt_type::NV12) {}
-
-    ~Video() {
-        streamoff();
-        close(vfd);
-        vfd = -1;
-    }
+    Video() = default;
+    ~Video();
 
     int init(const char *dev);
-    int streamon_mp_dmabuf(std::vector<DmaBuf> &dbufs);
-
-    DmaBuf cap_frame_get();
-    void cap_frame_put(DmaBuf &&dmabuf);
-
-    int streamon(enum mem_type mem_t = mem_type::MMAP);
-
+    int streamon_mp_dmabuf(unsigned int n);
+    int streamon_dmabuf(unsigned int n);
+    int streamon(unsigned int n);
     void streamoff();
+
+    std::shared_ptr<ImgDMABuf> cap_frame_get();
+    void cap_frame_put(std::shared_ptr<ImgDMABuf> pb);
 
     int captrue_mp_dma_test();
 
@@ -136,52 +103,31 @@ class Video {
         return line_rate / fps - height;
     }
 
-    static int set_v4l2_ctrl(const char *dev, unsigned int id, int value) {
-        int fd;
-        struct v4l2_control ctrl;
+    int set_v4l2_ctrl(unsigned int id, int value) {
+        struct v4l2_control ctrl = {
+            .id = id,
+            .value = value,
+        };
 
-        fd = open(dev, O_RDWR);
-        if (fd < 0) {
-            fprintf(stderr, "open %s failed: %s\n", dev, strerror(errno));
-            return -1;
+        if (ioctl(vfd, VIDIOC_S_CTRL, &ctrl) < 0) {
+            fmt::print("VIDIOC_S_CTRL failed, reason={}\n", strerror(errno));
+            return -errno;
         }
 
-        memset(&ctrl, 0, sizeof(ctrl));
-        ctrl.id = id;
-        ctrl.value = value;
-
-        if (ioctl(fd, VIDIOC_S_CTRL, &ctrl) < 0) {
-            fprintf(stderr, "VIDIOC_S_CTRL failed: %s\n", strerror(errno));
-            close(fd);
-            return -1;
-        }
-
-        close(fd);
         return 0;
     }
 
-    static int get_v4l2_ctrl(const char *dev, unsigned int id, int *value) {
-        int fd;
-        struct v4l2_control ctrl;
+    int get_v4l2_ctrl(unsigned int id, int *value) {
+        struct v4l2_control ctrl = {
+            .id = id,
+        };
 
-        fd = open(dev, O_RDWR);
-        if (fd < 0) {
-            fprintf(stderr, "open %s failed: %s\n", dev, strerror(errno));
-            return -1;
-        }
-
-        memset(&ctrl, 0, sizeof(ctrl));
-        ctrl.id = id;
-
-        if (ioctl(fd, VIDIOC_G_CTRL, &ctrl) < 0) {
-            fprintf(stderr, "VIDIOC_G_CTRL failed: %s\n", strerror(errno));
-            close(fd);
-            return -1;
+        if (ioctl(vfd, VIDIOC_G_CTRL, &ctrl) < 0) {
+            fmt::print("\t#VIDIOC_S_CTRL failed, reason={}\n", strerror(errno));
+            return -errno;
         }
 
         *value = ctrl.value;
-
-        close(fd);
         return 0;
     }
 };

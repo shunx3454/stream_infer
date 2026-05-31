@@ -14,16 +14,18 @@
 #include <functional>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <fmt/core.h>
 
 #include "dmabuf.h"
+#include "img_dmabuf.h"
 
 // 定义回调函数的别名
-using EncodedFrameWriter = std::function<void(const void *ptr,    // 编码后的 H264/H265 数据指针
-                                              size_t len,         // 数据长度
-                                              RK_U32 is_keyframe, // 是否为关键帧 (I帧)
-                                              RK_U32 eos          // 是否为最后一帧 (End of Stream)
+using EncodedFrameWriter = std::function<void(const void *, // 编码后的 H264/H265 数据指针
+                                              size_t,       // 数据长度
+                                              RK_U32,       // 是否为关键帧 (I帧)
+                                              RK_U32        // 是否为最后一帧 (End of Stream)
                                               )>;
 
 class MppEncoder {
@@ -35,30 +37,32 @@ class MppEncoder {
     MppEncRcMode rc_mode{MPP_ENC_RC_MODE_VBR};
     MppEncSeiMode sei_mode{MPP_ENC_SEI_MODE_ONE_SEQ};
     MppEncHeaderMode header_mode{MPP_ENC_HEADER_MODE_EACH_IDR};
-    MppFrameFormat fmt_type{MPP_FMT_YUV422_UYVY};
     MppEncRcDropFrmMode drop_mode{MPP_ENC_RC_DROP_FRM_NORMAL};
     MppEncCfg cfg{NULL};
 
-    MppBuffer frm_buf{NULL};
-    MppBuffer pkt_buf{NULL};
     MppBuffer hdr_buf{NULL};
 
-    RK_U32 height{1088}, width{1920}; // UYVY : 1920 * 2 (UYVY) * 1088
-    RK_U32 hor_stride{width * 2}, ver_stride{height};
-    RK_U32 fps{30};
-    RK_U32 bps{height * width / 8 * fps};
-    RK_U32 gop{30};
+    std::unordered_map<int, MppBuffer> MppBufferMap;
+    int n_buffers{0};
+
+    RK_U32 height_, width_; // UYVY : 1920 * 2 (UYVY) * 1088
+    RK_U32 hor_stride_, ver_stride_;
+    RK_U32 fps_;
+    RK_U32 gop_;
+    RK_U32 bps_;
+    MppFrameFormat pixfmt_;
 
     // io
     std::ofstream of{"/home/rock/c_cpp/stream_infer/asset/out.h264",
                      std::ios::binary | std::ios::out | std::ios::trunc};
 
   public:
-    MppEncoder() {}
+    MppEncoder() = delete;
+    MppEncoder(RK_U32 w, RK_U32 h, MppFrameFormat pixfmt, RK_U32 w_stride, RK_U32 h_stride, RK_U32 fps, RK_U32 gop);
+    ~MppEncoder();
 
     int init();
-    int encode(DmaBuf &frm_dbuf, DmaBuf &pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos, const EncodedFrameWriter &writer);
     std::vector<uint8_t> getHdr();
-
-    ~MppEncoder();
+    int encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos);
+    int encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos, const EncodedFrameWriter &writer);
 };

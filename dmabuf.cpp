@@ -19,32 +19,32 @@ DmaBuf::DmaBuf(size_t size, const char *heap_path) {
 DmaBuf::~DmaBuf() { free(); }
 
 // 移动构造函数：接管另一个对象的资源
-DmaBuf::DmaBuf(DmaBuf &&other) noexcept {
-    fd_ = other.fd_;
-    va_ = other.va_;
-    size_ = other.size_;
+// DmaBuf::DmaBuf(DmaBuf &&other) noexcept {
+//     fd_ = other.fd_;
+//     va_ = other.va_;
+//     size_ = other.size_;
 
-    // 将原对象内部状态清空，防止其析构时释放资源
-    other.fd_ = -1;
-    other.va_ = nullptr;
-    other.size_ = 0;
-}
+//     // 将原对象内部状态清空，防止其析构时释放资源
+//     other.fd_ = -1;
+//     other.va_ = nullptr;
+//     other.size_ = 0;
+// }
 
 // 移动赋值运算符
-DmaBuf &DmaBuf::operator=(DmaBuf &&other) noexcept {
-    if (this != &other) {
-        free(); // 先释放自己原本持有的资源
+// DmaBuf &DmaBuf::operator=(DmaBuf &&other) noexcept {
+//     if (this != &other) {
+//         free(); // 先释放自己原本持有的资源
 
-        fd_ = other.fd_;
-        va_ = other.va_;
-        size_ = other.size_;
+//         fd_ = other.fd_;
+//         va_ = other.va_;
+//         size_ = other.size_;
 
-        other.fd_ = -1;
-        other.va_ = nullptr;
-        other.size_ = 0;
-    }
-    return *this;
-}
+//         other.fd_ = -1;
+//         other.va_ = nullptr;
+//         other.size_ = 0;
+//     }
+//     return *this;
+// }
 
 void DmaBuf::free() {
     if (isValid()) {
