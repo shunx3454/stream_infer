@@ -2,10 +2,10 @@
 #include "dmabuf.h"
 
 #include <atomic>
-#include <vector>
+#include <condition_variable>
 #include <mutex>
 #include <queue>
-#include <condition_variable>
+#include <vector>
 
 class ImgDMABuf : public DmaBuf {
 
@@ -13,16 +13,19 @@ class ImgDMABuf : public DmaBuf {
     ImgDMABuf() = default;
     ~ImgDMABuf() = default;
 
+    ImgDMABuf(size_t n, int index);
     ImgDMABuf(int width, int height, int w_stride, int h_stride, int pixfmt, int index);
 
     ImgDMABuf(const ImgDMABuf &) = delete;
-    ImgDMABuf& operator=(const ImgDMABuf &) = delete;
+    ImgDMABuf &operator=(const ImgDMABuf &) = delete;
 
     // 移动语义
-    ImgDMABuf(ImgDMABuf&& ) noexcept = delete;
-    ImgDMABuf& operator=(ImgDMABuf&& ) noexcept = delete;
+    ImgDMABuf(ImgDMABuf &&) noexcept = delete;
+    ImgDMABuf &operator=(ImgDMABuf &&) noexcept = delete;
 
     unsigned int getIndex();
+    void pkt_set_ptr(void *ptr);
+    void pkt_set_len(size_t len);
 
   private:
     int width_;
@@ -32,22 +35,27 @@ class ImgDMABuf : public DmaBuf {
     int img_size_; // bytes
     int v4l2PixFmt_;
 
+    // pkt domain
+    size_t pkt_len_;
+    void *pkt_ptr_;
+    int eos;
+
     unsigned int index_; // for v4l2 index
-    int seq_;   // dq buf sequence
+    int seq_;            // dq buf sequence
 };
 
-
-
 class ImgDMABufPool {
-public:
+  public:
     ImgDMABufPool() = delete;
-    ImgDMABufPool(size_t n, int width, int height, int w_stride, int h_stride, int pixfmt);
+    ImgDMABufPool(size_t n);
+    ImgDMABufPool(size_t n, unsigned int width, unsigned int height, unsigned int w_stride, unsigned int h_stride,
+                  unsigned int pixfmt);
 
     std::shared_ptr<ImgDMABuf> get(std::atomic<bool> &);
     void put(std::shared_ptr<ImgDMABuf>, std::atomic<bool> &);
     void wakeup();
 
-private:
+  private:
     std::mutex mtx_;
     std::condition_variable cv_put_;
     std::condition_variable cv_get_;

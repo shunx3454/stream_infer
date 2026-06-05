@@ -1,6 +1,8 @@
-#include "mpp_enc.h"
 #include <thread>
 
+#include "mpp_enc.h"
+
+#define MPP_ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
 #define MAX_FILE_NAME_LENGTH 256
 
 static RK_S32 qbias_arr_hevc[18] = {3, 6, 13, 171, 171, 171, 171, 3, 6, 13, 171, 171, 220, 171, 85, 85, 85, 85};
@@ -23,9 +25,60 @@ static RK_S32 aq_step_p_ipc[16] = {
     -8, -7, -6, -5, -4, -2, -1, -1, 0, 2, 3, 4, 6, 8, 9, 10,
 };
 
-static void img_fill_uyvy(void *ptr, size_t hight, size_t width) {}
+static RK_S32 get_mdinfo_size(RK_U32 w, RK_U32 h, MppCodingType type) {
+    RK_S32 md_size;
+
+    // if (soc_type == ROCKCHIP_SOC_RV1126B) {
+    //     md_size = (MPP_VIDEO_CodingHEVC == type) ? (MPP_ALIGN(w, 32) >> 5) * (MPP_ALIGN(h, 32) >> 5) * 20
+    //                                              : (MPP_ALIGN(w, 64) >> 6) * (MPP_ALIGN(h, 16) >> 4) * 16;
+    // } else if (soc_type == ROCKCHIP_SOC_RK3588) {
+    //     md_size = (MPP_ALIGN(w, 64) >> 6) * (MPP_ALIGN(h, 64) >> 6) * 32;
+    // } else {
+    //     md_size = (MPP_VIDEO_CodingHEVC == type) ? (MPP_ALIGN(w, 32) >> 5) * (MPP_ALIGN(h, 32) >> 5) * 16
+    //                                              : (MPP_ALIGN(w, 64) >> 6) * (MPP_ALIGN(h, 16) >> 4) * 16;
+    // }
+
+    return (MPP_ALIGN(w, 64) >> 6) * (MPP_ALIGN(h, 64) >> 6) * 32;
+}
+
+MppEncoder::MppEncoder(RK_U32 w, RK_U32 h, MppFrameFormat pixfmt, RK_U32 w_stride, RK_U32 h_stride, RK_U32 fps,
+                       RK_U32 gop)
+    : width_(w), height_(h), pixfmt_(pixfmt), hor_stride_(w_stride), ver_stride_(h_stride), fps_(fps), gop_(gop),
+      bps_(width_ * height_ / 8 * fps_) {}
+
+MppEncoder::~MppEncoder() {
+    for (auto &e : MppBufferMap) {
+        if (e.second != NULL) {
+            auto ret = mpp_buffer_put(e.second);
+            if (ret != MPP_OK) {
+                fmt::print("mpp_buffer_put error: {}\n", ret);
+            }
+        }
+    }
+
+    if (cfg) {
+        MPP_RET ret = mpp_enc_cfg_deinit(cfg);
+        if (ret) {
+            fmt::print("mpp_enc_cfg_deinit error: {}\n", ret);
+        }
+    }
+
+    if (ctx) {
+        MPP_RET ret = mpi->reset(ctx);
+        if (ret) {
+            fmt::print("mpi->reset error: {}\n", ret);
+        }
+
+        ret = mpp_destroy(ctx);
+        if (ret) {
+            fmt::print("mpp_destroy error: {}\n", ret);
+        }
+    }
+}
 
 int MppEncoder::init() {
+    MppBufferInfo info{};
+
     if (!of.is_open()) {
         fmt::print("of file open error\n");
         return -1;
@@ -37,11 +90,11 @@ int MppEncoder::init() {
         goto INIT_FAIL;
     }
 
-    ret = mpi->control(ctx, MPP_SET_OUTPUT_TIMEOUT, &timeout);
-    if (MPP_OK != ret) {
-        fmt::print("mpi->control MPP_SET_OUTPUT_TIMEOUT error: {}\n", ret);
-        goto INIT_FAIL;
-    }
+    // ret = mpi->control(ctx, MPP_SET_OUTPUT_TIMEOUT, &timeout);
+    // if (MPP_OK != ret) {
+    //     fmt::print("mpi->control MPP_SET_OUTPUT_TIMEOUT error: {}\n", ret);
+    //     goto INIT_FAIL;
+    // }
 
     ret = mpp_init(ctx, MPP_CTX_ENC, enc_type);
     if (ret) {
@@ -114,17 +167,17 @@ int MppEncoder::init() {
         // mpp_enc_cfg_set_s32(cfg, "hw:skip_sad", 8);
 
         //  fps
-        mpp_enc_cfg_set_s32(cfg, "rc:fps_in_flex", 1);
+        mpp_enc_cfg_set_s32(cfg, "rc:fps_in_flex", 0);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps_);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_in_denom", 1);
-        mpp_enc_cfg_set_s32(cfg, "rc:fps_out_flex", 1);
+        mpp_enc_cfg_set_s32(cfg, "rc:fps_out_flex", 0);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_out_num", fps_);
         mpp_enc_cfg_set_s32(cfg, "rc:fps_out_denom", 1);
         // bps
         mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps_);
-        /* default use CBR mode */
-        mpp_enc_cfg_set_s32(cfg, "rc:bps_max", bps_ * 2);
-        mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps_ / 2);
+        /* default use VBR mode */
+        mpp_enc_cfg_set_s32(cfg, "rc:bps_max", bps_ * 17 / 16);
+        mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps_ / 16);
         // gop
         mpp_enc_cfg_set_s32(cfg, "rc:gop", gop_);
 
@@ -155,7 +208,7 @@ int MppEncoder::init() {
          * 40 / 41 / 42         - 1080p@30fps / 1080p@30fps / 1080p@60fps
          * 50 / 51 / 52         - 4K@30fps
          */
-        mpp_enc_cfg_set_s32(cfg, "h264:level", 40);
+        mpp_enc_cfg_set_s32(cfg, "h264:level", 30);
         mpp_enc_cfg_set_s32(cfg, "h264:cabac_en", 1);
         mpp_enc_cfg_set_s32(cfg, "h264:cabac_idc", 0);
         mpp_enc_cfg_set_s32(cfg, "h264:trans8x8", 1);
@@ -168,7 +221,7 @@ int MppEncoder::init() {
         mpp_enc_cfg_set_st(cfg, "hw:qbias_arr", qbias_arr_avc);
 
         ret = mpi->control(ctx, MPP_ENC_SET_CFG, cfg);
-        if (ret) {
+        if (ret != MPP_OK) {
             fmt::print("control MPP_ENC_SET_CFG error: {}\n", ret);
             goto INIT_FAIL;
         }
@@ -203,84 +256,6 @@ int MppEncoder::init() {
             }
         }
     }
-
-    // buffer
-    /*{
-        MppBufferGroup group{NULL};
-        auto dmabuf = DmaBuf(hor_stride * ver_stride);
-        if (!dmabuf.isValid()) {
-            fmt::print("DmaBuf construct error\n");
-        }
-        fmt::print("dmabuf: fd={}, vaddr={}, size={}\n", dmabuf.getFd(), dmabuf.getVa(), dmabuf.getSize());
-
-        MppBufferInfo info;
-        memset(&info, 0, sizeof(MppBufferInfo));
-        info.fd = dmabuf.getFd();
-        info.size = dmabuf.getSize();
-        info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA);
-        info.index = 0;
-
-        // group get
-        ret = mpp_buffer_group_get_external(&group, (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA));
-        if (ret != MPP_OK) {
-            fmt::print("mpp_buffer_group_get_external error {}\n", ret);
-            goto INIT_FAIL;
-        }
-
-        // buffer commit
-        ret = mpp_buffer_commit(group, &info);
-        if (ret != MPP_OK) {
-            fmt::print("mpp_buffer_commit error {}\n", ret);
-            goto INIT_FAIL;
-        }
-
-        // buffer get
-        ret = mpp_buffer_get(group, &frm_buf, info.size);
-        if (ret != MPP_OK) {
-            fmt::print("mpp_buffer_get frm_buf error {}\n", ret);
-            goto INIT_FAIL;
-        }
-        memset(&info, 0, sizeof(MppBufferInfo));
-        ret = mpp_buffer_info_get(frm_buf, &info);
-        if (ret != MPP_OK) {
-            fmt::print("mpp_buffer_info_get error {}\n", ret);
-            goto INIT_FAIL;
-        }
-        fmt::print("mpp dmabuf: fd={}, vaddr={}, size={}, type={:#x}\n", info.fd, info.ptr, info.size, info.type);
-
-        // buffer put
-        ret = mpp_buffer_put(frm_buf);
-        if (ret != MPP_OK) {
-            fmt::print("mpp_buffer_put frm_buf error {}\n", ret);
-            goto INIT_FAIL;
-        }
-
-        // group put
-        ret = mpp_buffer_group_put(group);
-        if (ret != MPP_OK) {
-            fmt::print("mpp_buffer_group_put error {}\n", ret);
-            goto INIT_FAIL;
-        }
-    }*/
-
-    // ret = mpp_buffer_import(&frm_buf, &info);
-    // if (ret != MPP_OK) {
-    //     fmt::print("mpp_buffer_import error {}\n", ret);
-    //     goto INIT_FAIL;
-    // }
-
-    /*
-    mpp_buffer_sync_begin(frm_buf);
-    memcpy(dmabuf.getVa(), "aaaabbbb", 8);
-    mpp_buffer_sync_end(frm_buf);
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    mpp_buffer_sync_begin(frm_buf);
-    for (int i = 0; i < 8; ++i) {
-        fmt::print("{} ", static_cast<char *>(info.ptr)[i]);
-    }
-    fmt::print("\n");
-    mpp_buffer_sync_end(frm_buf);
-    */
 
     return 0;
 
@@ -339,18 +314,21 @@ OUT:
     return hdr;
 }
 
-int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos) {
-    return this->encode(frm_dbuf, pkt_dbuf, iskeyFrame, eos, [this](const void *ptr, size_t len, RK_U32 iskey, RK_U32 eos) {
-        of.write((const char *)ptr, len);
-        if (eos)
-            of.close();
-    });
+int MppEncoder::encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgDMABuf> pkt_dbuf, RK_U32 iskeyFrame,
+                       RK_U32 eos) {
+    return this->encode(frm_dbuf, pkt_dbuf, iskeyFrame, eos,
+                        [this](const void *ptr, size_t len, RK_U32 iskey, RK_U32 eos) {
+                            of.write((const char *)ptr, len);
+                            if (eos)
+                                of.close();
+                        });
 }
 
-int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos,
-                       const EncodedFrameWriter &writer) {
+int MppEncoder::encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgDMABuf> pkt_dbuf, RK_U32 iskeyFrame,
+                       RK_U32 eos, const EncodedFrameWriter &writer) {
     MPP_RET ret{MPP_OK};
     MppBufferInfo info;
+    MppMeta meta{NULL};
 
     MppBuffer frm_buf;
     MppBuffer pkt_buf;
@@ -369,7 +347,7 @@ int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK
             info.index = n_buffers++;
             info.fd = frm_dbuf->getFd();
             info.size = frm_dbuf->getSize();
-            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG);
+            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG  | MPP_BUFFER_FLAGS_CACHABLE);
             ret = mpp_buffer_import(&frm_buf, &info);
             if (ret != MPP_OK) {
                 fmt::print("mpp_buffer_import error {}\n", ret);
@@ -405,7 +383,7 @@ int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK
             info.index = n_buffers++;
             info.fd = pkt_dbuf->getFd();
             info.size = pkt_dbuf->getSize();
-            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG);
+            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG  | MPP_BUFFER_FLAGS_CACHABLE);
             ret = mpp_buffer_import(&pkt_buf, &info);
             if (ret != MPP_OK) {
                 fmt::print("mpp_buffer_import error {}\n", ret);
@@ -455,6 +433,14 @@ int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK
     /* NOTE: It is important to clear output packet length!! */
     mpp_packet_set_length(pkt, 0);
 
+    // link frm and pkt
+    meta = mpp_frame_get_meta(frm);
+    ret = mpp_meta_set_packet(meta, KEY_OUTPUT_PACKET, pkt);
+    if (ret != MPP_OK) {
+        fmt::print("KEY_OUTPUT_PACKET error {}\n", ret);
+        goto OUT;
+    }
+
     ret = mpi->encode_put_frame(ctx, frm);
     if (ret != MPP_OK) {
         fmt::print("encode_put_frame error {}\n", ret);
@@ -474,8 +460,6 @@ int MppEncoder::encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK
         pkt_len = len;
 
         eos = mpp_packet_get_eos(pkt);
-
-        fmt::print("pkt: ptr={}, len={}, eos={} \n", ptr, len, eos);
 
         pkt_dbuf->syncDeviceToCpu();
         writer(ptr, len, iskeyFrame, eos);
@@ -497,40 +481,4 @@ OUT:
     }
 
     return pkt_len;
-}
-
-MppEncoder::MppEncoder(RK_U32 w, RK_U32 h, MppFrameFormat pixfmt, RK_U32 w_stride, RK_U32 h_stride, RK_U32 fps,
-                       RK_U32 gop)
-    : width_(w), height_(h), pixfmt_(pixfmt), hor_stride_(w_stride), ver_stride_(h_stride), fps_(fps), gop_(gop)
-
-{}
-
-MppEncoder::~MppEncoder() {
-    for (auto &e : MppBufferMap) {
-        if (e.second != NULL) {
-            auto ret = mpp_buffer_put(e.second);
-            if (ret != MPP_OK) {
-                fmt::print("mpp_buffer_put error: {}\n", ret);
-            }
-        }
-    }
-
-    if (cfg) {
-        MPP_RET ret = mpp_enc_cfg_deinit(cfg);
-        if (ret) {
-            fmt::print("mpp_enc_cfg_deinit error: {}\n", ret);
-        }
-    }
-
-    if (ctx) {
-        MPP_RET ret = mpi->reset(ctx);
-        if (ret) {
-            fmt::print("mpi->reset error: {}\n", ret);
-        }
-
-        ret = mpp_destroy(ctx);
-        if (ret) {
-            fmt::print("mpp_destroy error: {}\n", ret);
-        }
-    }
 }

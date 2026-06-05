@@ -11,6 +11,10 @@ static const char *v4l2PixFmtStr(unsigned int ifmt) {
     return v4l2_pix_type_str;
 }
 
+Video::Video(unsigned int width, unsigned int height, unsigned int pixfmt, unsigned int fps, unsigned int perlinebytes,
+             size_t imgsize)
+    : width_(width), height_(height), fps_(fps), pixfmt_(pixfmt), perlinebytes_(perlinebytes), imgsize_(imgsize) {}
+
 Video::~Video() {
     streamoff();
     close(vfd);
@@ -237,17 +241,17 @@ int Video::streamon_mp_dmabuf(unsigned int n) {
             {
                 .pix_mp =
                     {
-                        .width = 1920,
-                        .height = 1088,
-                        .pixelformat = V4L2_PIX_FMT_UYVY,
+                        .width = width_,
+                        .height = height_,
+                        .pixelformat = pixfmt_,
                         .field = V4L2_FIELD_NONE,
                         .colorspace = V4L2_COLORSPACE_SRGB,
                         .plane_fmt =
                             {
                                 [0] =
                                     {
-                                        .sizeimage = 1920 * 1088 * 2,
-                                        .bytesperline = 1920 * 2,
+                                        .sizeimage = imgsize_,
+                                        .bytesperline = perlinebytes_,
                                     },
                             },
                     },
@@ -266,13 +270,13 @@ int Video::streamon_mp_dmabuf(unsigned int n) {
         fmt::print("VIDIOC_G_FMT failed, reason={}\n", strerror(errno));
         return -errno;
     }
-    height = fmt.fmt.pix_mp.height;
-    width = fmt.fmt.pix_mp.width;
-    frame_size = fmt.fmt.pix_mp.plane_fmt[0].sizeimage;
-    pixelformat = fmt.fmt.pix_mp.pixelformat;
+    height_ = fmt.fmt.pix_mp.height;
+    width_ = fmt.fmt.pix_mp.width;
+    imgsize_ = fmt.fmt.pix_mp.plane_fmt[0].sizeimage;
+    pixfmt_ = fmt.fmt.pix_mp.pixelformat;
     num_planes = fmt.fmt.pix_mp.num_planes;
-    fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={} frame_size={}\n", fmt.type, width,
-               height, v4l2PixFmtStr(pixelformat), num_planes, frame_size);
+    fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={} frame_size={}\n", fmt.type, width_,
+               height_, v4l2PixFmtStr(pixfmt_), num_planes, imgsize_);
 
     // v4l2申请DMA缓冲区
     struct v4l2_requestbuffers req = {
@@ -301,26 +305,6 @@ int Video::streamon_mp_dmabuf(unsigned int n) {
     return 0;
 }
 
-void Video::streamoff() {
-    if (isCapturing) {
-        if (ioctl(vfd, VIDIOC_STREAMOFF, &v4l2BufType) < 0) {
-            fmt::print("VIDIOC_STREAMON failed, reason={}\n", strerror(errno));
-            return;
-        }
-        fmt::print("#### Stream off ####\n");
-    }
-
-    // 清除buffer
-    struct v4l2_requestbuffers req;
-    req.type = v4l2BufType;
-    req.count = 0;
-    req.memory = V4L2_MEMORY_DMABUF;
-    if (ioctl(vfd, VIDIOC_REQBUFS, &req) < 0) {
-        fmt::print("VIDIOC_REQBUFS failed, reason={}\n", strerror(errno));
-        return;
-    }
-}
-
 int Video::streamon_dmabuf(unsigned int n) {
     // UAC 720p fmt
     struct v4l2_format fmt = {
@@ -329,11 +313,11 @@ int Video::streamon_dmabuf(unsigned int n) {
             {
                 .pix =
                     {
-                        .width = 1280,
-                        .height = 720,
-                        .pixelformat = V4L2_PIX_FMT_YUYV,
-                        .bytesperline = 1280 * 2,
-                        .sizeimage = 1280 * 720 * 2,
+                        .width = width_,
+                        .height = height_,
+                        .pixelformat = pixfmt_,
+                        .bytesperline = perlinebytes_,
+                        .sizeimage = imgsize_,
                         .colorspace = V4L2_COLORSPACE_SRGB,
                     },
             },
@@ -349,13 +333,13 @@ int Video::streamon_dmabuf(unsigned int n) {
         fmt::print("VIDIOC_G_FMT failed, reason={}\n", strerror(errno));
         return -errno;
     }
-    height = fmt.fmt.pix_mp.height;
-    width = fmt.fmt.pix_mp.width;
-    frame_size = fmt.fmt.pix_mp.plane_fmt[0].sizeimage;
-    pixelformat = fmt.fmt.pix_mp.pixelformat;
-    num_planes = fmt.fmt.pix_mp.num_planes;
-    fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={} frame_size={}\n", fmt.type, width,
-               height, v4l2PixFmtStr(pixelformat), num_planes, frame_size);
+    width_ = fmt.fmt.pix.width;
+    height_ = fmt.fmt.pix.height;
+    imgsize_ = fmt.fmt.pix.sizeimage;
+    pixfmt_ = fmt.fmt.pix.pixelformat;
+    num_planes = 0;
+    fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={} frame_size={}\n", fmt.type, width_,
+               height_, v4l2PixFmtStr(pixfmt_), num_planes, imgsize_);
 
     // 设置帧率
     // 设置目标帧率：30fps = 1/30 秒每帧
@@ -368,7 +352,7 @@ int Video::streamon_dmabuf(unsigned int n) {
         ioctl(vfd, VIDIOC_G_PARM, &streamparm);
 
         streamparm.parm.capture.timeperframe.numerator = 1;
-        streamparm.parm.capture.timeperframe.denominator = 30;
+        streamparm.parm.capture.timeperframe.denominator = fps_;
         // 写入配置
         if (ioctl(vfd, VIDIOC_S_PARM, &streamparm) != 0) {
             fmt::print("VIDIOC_S_PARM failed, reason={}\n", strerror(errno));
@@ -416,16 +400,36 @@ int Video::streamon_dmabuf(unsigned int n) {
 
 int Video::streamon(unsigned int n) {
 
-    imgdbufs.reserve(n);
+    imgdbufs_.reserve(n);
 
-    for(unsigned int i = 0; i < n; ++i) {
-        imgdbufs.emplace(i, std::make_shared<ImgDMABuf>());
+    for (unsigned int i = 0; i < n; ++i) {
+        imgdbufs_.emplace(i, std::make_shared<ImgDMABuf>());
     }
 
     if (isMplane) {
         return streamon_mp_dmabuf(n);
     } else {
         return streamon_dmabuf(n);
+    }
+}
+
+void Video::streamoff() {
+    if (isCapturing) {
+        if (ioctl(vfd, VIDIOC_STREAMOFF, &v4l2BufType) < 0) {
+            fmt::print("VIDIOC_STREAMON failed, reason={}\n", strerror(errno));
+            return;
+        }
+        fmt::print("#### Stream off ####\n");
+    }
+
+    // 清除buffer
+    struct v4l2_requestbuffers req;
+    req.type = v4l2BufType;
+    req.count = 0;
+    req.memory = V4L2_MEMORY_DMABUF;
+    if (ioctl(vfd, VIDIOC_REQBUFS, &req) < 0) {
+        fmt::print("VIDIOC_REQBUFS failed, reason={}\n", strerror(errno));
+        return;
     }
 }
 
@@ -448,15 +452,25 @@ std::shared_ptr<ImgDMABuf> Video::cap_frame_get() {
     }
 
     // 返回所有权
-    auto it = imgdbufs.find(buf.index);
-    if (it == imgdbufs.end()) {
-        fmt::print("v4l2 never put this buffer\n");
-        return {};
+    {
+        std::lock_guard lock(mtx_);
+        auto it = imgdbufs_.find(buf.index);
+        if (it == imgdbufs_.end()) {
+            fmt::print("v4l2 never put this buffer\n");
+            return {};
+        }
+        return std::move(it->second);
     }
-    return std::move(it->second);
 }
 
 void Video::cap_frame_put(std::shared_ptr<ImgDMABuf> pb) {
+    if (pb == nullptr) {
+        return;
+    }
+    if (!pb->isValid()) {
+        return;
+    }
+
     struct v4l2_plane planes[1] = {
         [0] =
             {
@@ -489,12 +503,14 @@ void Video::cap_frame_put(std::shared_ptr<ImgDMABuf> pb) {
     }
 
     // 引用资源
-    auto it = imgdbufs.find(pb->getIndex());
-    if (it == imgdbufs.end()) {
-        fmt::print("Index error\n");
-    }
-    else {
-        it->second = std::move(pb);
+    {
+        std::lock_guard lock(mtx_);
+        auto it = imgdbufs_.find(pb->getIndex());
+        if (it == imgdbufs_.end()) {
+            fmt::print("Index error\n");
+        } else {
+            it->second = std::move(pb);
+        }
     }
 }
 

@@ -481,14 +481,14 @@ int main(int argc, char *argv[]) {
     // }
 
     {
-        FLAGS_minloglevel = 0;
-        FLAGS_alsologtostderr = true;
-        FLAGS_colorlogtostderr = true;
-        google::InitGoogleLogging(argv[0]);
+        // FLAGS_minloglevel = 0;
+        // FLAGS_alsologtostderr = true;
+        // FLAGS_colorlogtostderr = true;
+        // google::InitGoogleLogging(argv[0]);
 
-        LOG(INFO) << "This is an info message.";
-        LOG(WARNING) << "This is a warning message.";
-        LOG(ERROR) << "This is an error message.";
+        // LOG(INFO) << "This is an info message.";
+        // LOG(WARNING) << "This is a warning message.";
+        // LOG(ERROR) << "This is an error message.";
     }
 
 #if 0
@@ -635,42 +635,40 @@ int main(int argc, char *argv[]) {
 #endif
 
     {
-        int w = 1920;
-        int h = 1088;
-        int w_s = w * 2;
-        int h_s = h;
-        int fps = 30;
-        int gop = 30;
-
-        // int w = 1280;
-        // int h = 720;
+        // int w = 1920;
+        // int h = 1088;
         // int w_s = w * 2;
         // int h_s = h;
-        // int fps = 10;
-        // int gop = 10;
+        // int fps = 30;
+        // int gop = 30;
+
+        unsigned int w = 800;
+        unsigned int h = 600;
+        unsigned int w_s = w * 2;
+        unsigned int h_s = h;
+        unsigned int fps = 20;
+        unsigned int gop = 20;
 
         std::string device_name = "/dev/video21";
         if (argc > 1) {
             device_name = argv[1];
         }
 
-        ImgDMABufPool Pool(4, w, h, w_s, h_s, V4L2_PIX_FMT_UYVY);
-        // ImgDMABufPool Pool(4, w, h, w_s, h_s, V4L2_PIX_FMT_YUYV);
+        // ImgDMABufPool Pool(4, w, h, w_s, h_s, V4L2_PIX_FMT_UYVY);
+        ImgDMABufPool Pool(4, w, h, w_s, h_s, V4L2_PIX_FMT_YUYV);
 
-        Video video;
+        Video video(w, h, V4L2_PIX_FMT_YUYV, fps, w_s, w_s * h_s);
         video.init(device_name.c_str());
         video.streamon(4);
 
         // mpp
-        MppEncoder encoder(w, h, MPP_FMT_YUV422_UYVY, w_s, h_s, fps, gop);
+        MppEncoder encoder(w, h, MPP_FMT_YUV422_YUYV, w_s, h_s, fps, gop);
         encoder.init();
         auto hdr = encoder.getHdr();
 
         // rtsp
-        DmaBuf pktDbuf(w_s * h_s);
-        DmaBuf frmDbuf(w_s * h_s);
-        // RtspPusher rtsp_client;
-        // rtsp_client.init("rtsp://192.168.137.1:8554/test", w, h, fps, hdr.data(), hdr.size());
+        RtspPusher rtsp_client;
+        rtsp_client.init("rtsp://192.168.137.1:8554/test", w, h, fps, hdr.data(), hdr.size());
 
         // int i = 0;
         // for (;;) {
@@ -683,32 +681,107 @@ int main(int argc, char *argv[]) {
         //         break;
         // }
 
+        // Time elapse: t1=168, t2=266, t3=268, t4=268
+        // Time elapse: t1=268, t2=366, t3=368, t4=368
+        // Time elapse: t1=368, t2=466, t3=468, t4=468
+
         std::atomic<bool> exited = false;
-        video.cap_frame_put(Pool.get(exited));
-        video.cap_frame_put(Pool.get(exited));
-        video.cap_frame_put(Pool.get(exited));
-        video.cap_frame_put(Pool.get(exited));
+        // video.cap_frame_put(Pool1.get(exited));
+        // video.cap_frame_put(Pool1.get(exited));
+        // video.cap_frame_put(Pool1.get(exited));
+        // video.cap_frame_put(Pool1.get(exited));
+        auto frmDbuf = std::make_shared<ImgDMABuf>(w, h, w_s, h_s, V4L2_PIX_FMT_YUYV, 0);
+        auto pktDbuf = std::make_shared<ImgDMABuf>(w, h, w_s, h_s, V4L2_PIX_FMT_YUYV, 0);
 
-        int i = 0;
-        for (;;) {
-            auto dbuf = video.cap_frame_get();
-            fmt::print("Get video dmabuf: ref={}, index={}, fd={}, size={}\n", dbuf.use_count(), dbuf->getIndex(),
-                       dbuf->getFd(), dbuf->getSize());
+        // time summary
+        auto ts = get_now_ms();
 
-            encoder.encode(dbuf.get(), &pktDbuf, (i % fps) == 0 ? 1 : 0, 0,
-                           [](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
-                               // t3 = get_now_ms();
-                               // rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
-                               // t4 = get_now_ms();
-                           });
+        std::thread t1([&video, &Pool, &exited]() {
+            while (!exited) {
+                video.cap_frame_put(Pool.get(exited));
+            }
+        });
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            video.cap_frame_put(dbuf);
+        std::thread t2([&video, &Pool, &encoder, &exited, &pktDbuf, &fps, &rtsp_client, &ts, &frmDbuf]() {
+            int i = 0;
+            // std::ofstream fl("/home/rock/c_cpp/stream_infer/800x600_YUYV_frames.yuv",
+            //                  std::ios::binary | std::ios::trunc);
+            // if (!fl.is_open()) {
+            //     return;
+            // }
+            
+            // auto yuv_data = read_file("/home/rock/c_cpp/stream_infer/800x600_YUYV_frames.yuv");
 
-            i++;
-            if (i == 1000 * fps)
-                break;
-        }
+            size_t pos = 0;
+            while (!exited) {
+                auto t1 = get_now_ms();
+                auto dbuf = video.cap_frame_get();
+                // fmt::print("Get video dmabuf: ref={}, index={}, fd={}, size={}, tk={}\n", dbuf.use_count(),
+                //    dbuf->getIndex(), dbuf->getFd(), dbuf->getSize(), t1 - ts);
+
+                // frmDbuf->syncDeviceToCpu();
+                // memcpy(frmDbuf->getVa(), yuv_data.data() + pos, frmDbuf->getSize());
+                // frmDbuf->syncCpuToDevice();
+                // pos += frmDbuf->getSize();
+                // if (pos >= yuv_data.size()) {
+                //     pos = 0;
+                // }
+
+
+                auto t2 = get_now_ms();
+
+                int64_t t3, t4;
+                encoder.encode(dbuf, pktDbuf, (i % fps) == 0 ? 1 : 0, 0,
+                               [&rtsp_client, &t3, &t4](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos)
+                               {
+                                   t3 = get_now_ms();
+                                   rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+                                   t4 = get_now_ms();
+                               });
+
+                //encoder.encode(frmDbuf, pktDbuf, (i % fps) == 0 ? 1 : 0, i == 99 ? 1 : 0);
+
+                fmt::print("time elapse: {}, {}, {}, {}\n", t1 - ts, t2 - ts, t3 - ts, t4 - ts);
+
+                // std::this_thread::sleep_for(std::chrono::milliseconds(45));
+                
+                Pool.put(dbuf, exited);
+
+                ++i;
+                // if (i == 100) {
+                //     exited.store(true);
+                //     Pool.wakeup();
+                //     break;
+                // }
+            }
+        });
+
+        t1.join();
+        t2.join();
+
+        // int i = 0;
+        // for (;;) {
+        //     auto t1 = get_now_ms();
+
+        //     auto dbuf = video.cap_frame_get();
+        //     // fmt::print("Get video dmabuf: ref={}, index={}, fd={}, size={}\r", dbuf.use_count(), dbuf->getIndex(),
+        //     //            dbuf->getFd(), dbuf->getSize());
+        //     auto t2 = get_now_ms();
+
+        //     int64_t t3, t4;
+        //     encoder.encode(dbuf, pktDbuf, (i % fps) == 0 ? 1 : 0, 0,
+        //                    [&rtsp_client, &t3, &t4](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
+        //                        t3 = get_now_ms();
+        //                        rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+        //                        t4 = get_now_ms();
+        //                    });
+        //     video.cap_frame_put(dbuf);
+        //     fmt::print("Time elapse: t1={}, t2={}, t3={}, t4={}\n", t1 - ts, t2 - ts, t3 - ts, t4 - ts);
+
+        //     i++;
+        //     if (i == 1000 * fps)
+        //         break;
+        // }
 
         /*
                 std::thread t1([&Pool, &video, &exited]() {

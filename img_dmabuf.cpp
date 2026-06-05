@@ -1,12 +1,28 @@
 #include "img_dmabuf.h"
 
+ImgDMABuf::ImgDMABuf(size_t n, int index) {}
+
 ImgDMABuf::ImgDMABuf(int width, int height, int w_stride, int h_stride, int pixfmt, int index)
     : DmaBuf(w_stride * h_stride), width_(width), height_(height), w_stride_(w_stride), h_stride_(h_stride),
-      v4l2PixFmt_(pixfmt), img_size_(w_stride * h_stride), index_(index), seq_(0) {}
+      v4l2PixFmt_(pixfmt), img_size_(w_stride * h_stride), index_(index), seq_(0), pkt_len_(0), pkt_ptr_(NULL), eos(0) {
+}
 
 unsigned int ImgDMABuf::getIndex() { return index_; }
 
-ImgDMABufPool::ImgDMABufPool(size_t n, int width, int height, int w_stride, int h_stride, int pixfmt) {
+void ImgDMABuf::pkt_set_ptr(void *ptr) { pkt_ptr_ = ptr; }
+
+void ImgDMABuf::pkt_set_len(size_t len) { pkt_len_ = len; }
+
+ImgDMABufPool::ImgDMABufPool(size_t n) {
+    pool_.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        pool_.push_back(std::make_shared<ImgDMABuf>());
+        index_queue_.push(i);
+    }
+}
+
+ImgDMABufPool::ImgDMABufPool(size_t n, unsigned int width, unsigned int height, unsigned int w_stride,
+                             unsigned int h_stride, unsigned int pixfmt) {
     pool_.reserve(n);
     for (int i = 0; i < n; ++i) {
         pool_.push_back(std::make_shared<ImgDMABuf>(width, height, w_stride, h_stride, pixfmt, i));
@@ -37,7 +53,7 @@ std::shared_ptr<ImgDMABuf> ImgDMABufPool::get(std::atomic<bool> &exited) {
 }
 
 void ImgDMABufPool::put(std::shared_ptr<ImgDMABuf> pb, std::atomic<bool> &exited) {
-    
+
     unsigned int index = pb->getIndex();
     {
         std::unique_lock lock(mtx_);

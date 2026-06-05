@@ -45,7 +45,6 @@
 
 class Video {
   public:
-
   private:
     int vfd;
     bool isMplane;
@@ -54,18 +53,23 @@ class Video {
     bool isTimePerFrameSupported;
     enum v4l2_buf_type v4l2BufType;
     enum v4l2_memory mem_type;
-    
+
     // index:sptr
-    std::unordered_map<unsigned int, std::shared_ptr<ImgDMABuf>> imgdbufs;
-    
-    int width;
-    int height;
-    int frame_size;
-    int pixelformat;
-    int num_planes;
+    std::mutex mtx_;
+    std::unordered_map<unsigned int, std::shared_ptr<ImgDMABuf>> imgdbufs_;
+
+    unsigned int width_;
+    unsigned int height_;
+    unsigned int pixfmt_;
+    unsigned int fps_;
+    unsigned int perlinebytes_;
+    unsigned int imgsize_;
+    unsigned int num_planes;
 
   public:
-    Video() = default;
+    Video() = delete;
+    Video(unsigned int width, unsigned int height, unsigned int pixfmt, unsigned int fps, unsigned int perlinebytes,
+          size_t imgsize);
     ~Video();
 
     int init(const char *dev);

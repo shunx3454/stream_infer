@@ -45,7 +45,7 @@ class MppEncoder {
     std::unordered_map<int, MppBuffer> MppBufferMap;
     int n_buffers{0};
 
-    RK_U32 height_, width_; // UYVY : 1920 * 2 (UYVY) * 1088
+    RK_U32 height_, width_;
     RK_U32 hor_stride_, ver_stride_;
     RK_U32 fps_;
     RK_U32 gop_;
@@ -63,6 +63,7 @@ class MppEncoder {
 
     int init();
     std::vector<uint8_t> getHdr();
-    int encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos);
-    int encode(DmaBuf *frm_dbuf, DmaBuf *pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos, const EncodedFrameWriter &writer);
+    int encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgDMABuf> pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos);
+    int encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgDMABuf> pkt_dbuf, RK_U32 iskeyFrame, RK_U32 eos,
+               const EncodedFrameWriter &writer);
 };
