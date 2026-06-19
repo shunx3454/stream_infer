@@ -13,6 +13,12 @@ void ImgDMABuf::pkt_set_ptr(void *ptr) { pkt_ptr_ = ptr; }
 
 void ImgDMABuf::pkt_set_len(size_t len) { pkt_len_ = len; }
 
+int ImgDMABuf::img_get_fmt() { return v4l2PixFmt_; }
+
+int ImgDMABuf::img_get_height() { return height_; }
+
+int ImgDMABuf::img_get_width() { return width_; }
+
 ImgDMABufPool::ImgDMABufPool(size_t n) {
     pool_.reserve(n);
     for (int i = 0; i < n; ++i) {

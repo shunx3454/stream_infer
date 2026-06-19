@@ -52,4 +52,12 @@ int write_image_to_file(void *buf, const char *path, int sw, int sh, int fmt, in
 }
 #endif
 
+inline static int64_t get_now_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts); // 硬件单调时钟，不受系统改时间影响
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+std::vector<char> read_file(const std::string &path);
+void img_uyvy_save(void *ptr, size_t width, size_t height, size_t x_offset, size_t y_offset, std::string path) ;
+
 #endif /* #ifndef __RGA_SAMPLES_UTILS_H__ */

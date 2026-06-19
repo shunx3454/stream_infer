@@ -34,6 +34,9 @@ add_executable(${PROJECT_NAME}
     rtsp.cpp
     v4l2_cap.cpp
     img_dmabuf.cpp
+    rknn.cpp
+    rga.cpp
+    avfmt_img.cpp
 )
 
 include_directories(${PROJECT_NAME}

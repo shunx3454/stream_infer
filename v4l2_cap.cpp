@@ -78,8 +78,8 @@ int Video::init(const char *dev) {
 
     // frame size query
     {
-        unsigned int fmt_query_array[] = {V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_NV21,   V4L2_PIX_FMT_MJPEG,
-                                          V4L2_PIX_FMT_JPEG, V4L2_PIX_FMT_YUV420, V4L2_PIX_FMT_YUYV};
+        unsigned int fmt_query_array[] = {V4L2_PIX_FMT_NV12,   V4L2_PIX_FMT_NV21, V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_JPEG,
+                                          V4L2_PIX_FMT_YUV420, V4L2_PIX_FMT_YUYV, V4L2_PIX_FMT_UYVY};
         struct v4l2_frmsizeenum framesize{};
         // FMT
         for (int i = 0; i < sizeof(fmt_query_array) / sizeof(fmt_query_array[0]); ++i) {
@@ -275,7 +275,8 @@ int Video::streamon_mp_dmabuf(unsigned int n) {
     imgsize_ = fmt.fmt.pix_mp.plane_fmt[0].sizeimage;
     pixfmt_ = fmt.fmt.pix_mp.pixelformat;
     num_planes = fmt.fmt.pix_mp.num_planes;
-    fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={} frame_size={}\n", fmt.type, width_,
+
+    fmt::print("Set fortmat: type={}, width={}, height={}, pixfmt={}, n_planes={}, frame_size={}\n", fmt.type, width_,
                height_, v4l2PixFmtStr(pixfmt_), num_planes, imgsize_);
 
     // v4l2申请DMA缓冲区
@@ -293,6 +294,17 @@ int Video::streamon_mp_dmabuf(unsigned int n) {
         return -1;
     }
     fmt::print("Allocated {} buffers\n", req.count);
+
+    // 设置帧率控制
+    if (set_sensor_fps(fps_) < 0) {
+        fmt::print("set_sensor_fps failed, reason={}\n", strerror(errno));
+        return -errno;
+    }
+    if (get_v4l2_ctrl(V4L2_CID_VBLANK, &vblank_) < 0) {
+        fmt::print("get_v4l2_ctrl failed, reason={}\n", strerror(errno));
+        return -errno;
+    }
+    fmt::print("vblank={}\n", vblank_);
 
     // 启动采集
     if (ioctl(vfd, VIDIOC_STREAMON, &v4l2BufType) < 0) {
@@ -342,17 +354,20 @@ int Video::streamon_dmabuf(unsigned int n) {
                height_, v4l2PixFmtStr(pixfmt_), num_planes, imgsize_);
 
     // 设置帧率
-    // 设置目标帧率：30fps = 1/30 秒每帧
     if (isTimePerFrameSupported) {
         struct v4l2_streamparm streamparm = {
             .type = v4l2BufType,
         };
 
         // 填充隐藏驱动参数
-        ioctl(vfd, VIDIOC_G_PARM, &streamparm);
+        if (ioctl(vfd, VIDIOC_G_PARM, &streamparm) < 0) {
+            fmt::print("streamon_dmabuf VIDIOC_G_PARM failed, reason={}\n", strerror(errno));
+            return -errno;
+        }
 
         streamparm.parm.capture.timeperframe.numerator = 1;
-        streamparm.parm.capture.timeperframe.denominator = fps_;
+        streamparm.parm.capture.timeperframe.denominator = 30;
+
         // 写入配置
         if (ioctl(vfd, VIDIOC_S_PARM, &streamparm) != 0) {
             fmt::print("VIDIOC_S_PARM failed, reason={}\n", strerror(errno));

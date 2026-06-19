@@ -44,7 +44,8 @@ static RK_S32 get_mdinfo_size(RK_U32 w, RK_U32 h, MppCodingType type) {
 MppEncoder::MppEncoder(RK_U32 w, RK_U32 h, MppFrameFormat pixfmt, RK_U32 w_stride, RK_U32 h_stride, RK_U32 fps,
                        RK_U32 gop)
     : width_(w), height_(h), pixfmt_(pixfmt), hor_stride_(w_stride), ver_stride_(h_stride), fps_(fps), gop_(gop),
-      bps_(width_ * height_ / 8 * fps_) {}
+    //   bps_(width_ * height_ / 8 * fps_) {}
+      bps_(4 * 1000 * 1000) {}
 
 MppEncoder::~MppEncoder() {
     for (auto &e : MppBufferMap) {
@@ -133,7 +134,7 @@ int MppEncoder::init() {
         // mpp_enc_cfg_set_s32(cfg, "prep:range", MPP_FRAME_RANGE_JPEG);
 
         // /* setup rate control parameters */
-        mpp_enc_cfg_set_s32(cfg, "rc:mode", rc_mode);
+        mpp_enc_cfg_set_s32(cfg, "rc:mode", MPP_ENC_RC_MODE_FIXQP);
         mpp_enc_cfg_set_u32(cfg, "rc:max_reenc_times", 0);
         mpp_enc_cfg_set_u32(cfg, "rc:super_mode", 0);
 
@@ -177,16 +178,16 @@ int MppEncoder::init() {
         mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps_);
         /* default use VBR mode */
         mpp_enc_cfg_set_s32(cfg, "rc:bps_max", bps_ * 17 / 16);
-        mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps_ / 16);
+        mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps_ / 2);
         // gop
         mpp_enc_cfg_set_s32(cfg, "rc:gop", gop_);
 
         // qp
-        mpp_enc_cfg_set_s32(cfg, "rc:qp_init", -1);
-        mpp_enc_cfg_set_s32(cfg, "rc:qp_max", 51);
-        mpp_enc_cfg_set_s32(cfg, "rc:qp_min", 10);
-        mpp_enc_cfg_set_s32(cfg, "rc:qp_max_i", 51);
-        mpp_enc_cfg_set_s32(cfg, "rc:qp_min_i", 10);
+        mpp_enc_cfg_set_s32(cfg, "rc:qp_init", 24);
+        mpp_enc_cfg_set_s32(cfg, "rc:qp_max", 24);
+        mpp_enc_cfg_set_s32(cfg, "rc:qp_min", 24);
+        mpp_enc_cfg_set_s32(cfg, "rc:qp_max_i", 22);
+        mpp_enc_cfg_set_s32(cfg, "rc:qp_min_i", 22);
         mpp_enc_cfg_set_s32(cfg, "rc:qp_ip", 2);
         mpp_enc_cfg_set_s32(cfg, "rc:fqp_min_i", 10);
         mpp_enc_cfg_set_s32(cfg, "rc:fqp_max_i", 45);
@@ -327,7 +328,6 @@ int MppEncoder::encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgD
 int MppEncoder::encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgDMABuf> pkt_dbuf, RK_U32 iskeyFrame,
                        RK_U32 eos, const EncodedFrameWriter &writer) {
     MPP_RET ret{MPP_OK};
-    MppBufferInfo info;
     MppMeta meta{NULL};
 
     MppBuffer frm_buf;
@@ -343,11 +343,13 @@ int MppEncoder::encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgD
                        frm_dbuf->getSize());
 
             // wrap frm_dbuf -> frm_buf
-            memset(&info, 0, sizeof(MppBufferInfo));
-            info.index = n_buffers++;
-            info.fd = frm_dbuf->getFd();
-            info.size = frm_dbuf->getSize();
-            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG  | MPP_BUFFER_FLAGS_CACHABLE);
+            MppBufferInfo info = {
+                .type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG | MPP_BUFFER_FLAGS_CACHABLE),
+                .size = frm_dbuf->getSize(),
+                .fd = frm_dbuf->getFd(),
+                .index = n_buffers++,
+            };
+
             ret = mpp_buffer_import(&frm_buf, &info);
             if (ret != MPP_OK) {
                 fmt::print("mpp_buffer_import error {}\n", ret);
@@ -379,11 +381,12 @@ int MppEncoder::encode(std::shared_ptr<ImgDMABuf> frm_dbuf, std::shared_ptr<ImgD
                        pkt_dbuf->getSize());
 
             // wrap pkt_dbuf -> pkt_buf
-            memset(&info, 0, sizeof(MppBufferInfo));
-            info.index = n_buffers++;
-            info.fd = pkt_dbuf->getFd();
-            info.size = pkt_dbuf->getSize();
-            info.type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG  | MPP_BUFFER_FLAGS_CACHABLE);
+            MppBufferInfo info = {
+                .type = (MppBufferType)(MPP_BUFFER_TYPE_EXT_DMA | MPP_BUFFER_FLAGS_CONTIG | MPP_BUFFER_FLAGS_CACHABLE),
+                .size = pkt_dbuf->getSize(),
+                .fd = pkt_dbuf->getFd(),
+                .index = n_buffers++,
+            };
             ret = mpp_buffer_import(&pkt_buf, &info);
             if (ret != MPP_OK) {
                 fmt::print("mpp_buffer_import error {}\n", ret);

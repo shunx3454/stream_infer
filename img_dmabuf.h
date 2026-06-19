@@ -26,6 +26,9 @@ class ImgDMABuf : public DmaBuf {
     unsigned int getIndex();
     void pkt_set_ptr(void *ptr);
     void pkt_set_len(size_t len);
+    int img_get_fmt();
+    int img_get_height();
+    int img_get_width();
 
   private:
     int width_;
