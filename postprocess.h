@@ -38,5 +38,10 @@ int post_process(int8_t *input0, int8_t *input1, int8_t *input2, int model_in_h,
                  const std::vector<int32_t> &qnt_zps, const std::vector<float> &qnt_scales,
                  detect_result_group_t *group);
 
+int anime_post_process(int8_t *input0, int8_t *input1, int8_t *input2, int model_in_h, int model_in_w,
+                       float conf_threshold, float nms_threshold, BOX_RECT pads, float scale_w, float scale_h,
+                       const std::vector<int32_t> &qnt_zps, const std::vector<float> &qnt_scales,
+                       detect_result_group_t *group);
+
 void deinitPostProcess();
 #endif //_RKNN_YOLOV5_DEMO_POSTPROCESS_H_

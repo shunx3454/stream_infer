@@ -1,6 +1,7 @@
 #pragma once
 #include "dmabuf.h"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -14,7 +15,7 @@ class ImgDMABuf : public DmaBuf {
     ~ImgDMABuf() = default;
 
     ImgDMABuf(size_t n, int index);
-    ImgDMABuf(int width, int height, int w_stride, int h_stride, int pixfmt, int index);
+    ImgDMABuf(int width, int height, int w_stride, int h_stride, int pixfmt);
 
     ImgDMABuf(const ImgDMABuf &) = delete;
     ImgDMABuf &operator=(const ImgDMABuf &) = delete;
@@ -23,12 +24,28 @@ class ImgDMABuf : public DmaBuf {
     ImgDMABuf(ImgDMABuf &&) noexcept = delete;
     ImgDMABuf &operator=(ImgDMABuf &&) noexcept = delete;
 
-    unsigned int getIndex();
+    // function
     void pkt_set_ptr(void *ptr);
     void pkt_set_len(size_t len);
+
+    void img_set_fps(int fps);
+    int img_get_fps();
+
     int img_get_fmt();
     int img_get_height();
     int img_get_width();
+
+    void img_set_stream_id(int id);
+    int img_get_stream_id();
+
+    void img_set_seq(int seq);
+    int img_get_seq();
+
+    unsigned int img_get_index();
+    void img_set_index(unsigned int index);
+
+    void img_set_user_data(void *data);
+    void *img_get_uaer_data();
 
   private:
     int width_;
@@ -37,6 +54,7 @@ class ImgDMABuf : public DmaBuf {
     int h_stride_; // lines
     int img_size_; // bytes
     int v4l2PixFmt_;
+    int fps_;
 
     // pkt domain
     size_t pkt_len_;
@@ -44,7 +62,11 @@ class ImgDMABuf : public DmaBuf {
     int eos;
 
     unsigned int index_; // for v4l2 index
-    int seq_;            // dq buf sequence
+    int stream_id_;      // stream id
+    int seq_;            // frame seq
+
+    // user data
+    void *data_;
 };
 
 class ImgDMABufPool {
@@ -62,6 +84,6 @@ class ImgDMABufPool {
     std::mutex mtx_;
     std::condition_variable cv_put_;
     std::condition_variable cv_get_;
-    std::vector<std::shared_ptr<ImgDMABuf>> pool_;
-    std::queue<unsigned int> index_queue_;
+    size_t capacity_;
+    std::queue<std::shared_ptr<ImgDMABuf>> pool_queue_;
 };

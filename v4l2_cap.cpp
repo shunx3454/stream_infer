@@ -498,7 +498,7 @@ void Video::cap_frame_put(std::shared_ptr<ImgDMABuf> pb) {
     };
 
     struct v4l2_buffer buf = {
-        .index = pb->getIndex(),
+        .index = pb->img_get_index(),
         .type = v4l2BufType,
         .memory = V4L2_MEMORY_DMABUF,
         .m =
@@ -520,7 +520,7 @@ void Video::cap_frame_put(std::shared_ptr<ImgDMABuf> pb) {
     // 引用资源
     {
         std::lock_guard lock(mtx_);
-        auto it = imgdbufs_.find(pb->getIndex());
+        auto it = imgdbufs_.find(pb->img_get_index());
         if (it == imgdbufs_.end()) {
             fmt::print("Index error\n");
         } else {

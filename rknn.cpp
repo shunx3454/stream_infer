@@ -284,11 +284,14 @@ RKNN::RKNN(std::string model_name, rknn_core_mask cm) {
 
     // resize imgd
     dstImgd = std::make_shared<ImgDMABuf>(in_attrs[0].dims[2], in_attrs[0].dims[1], in_attrs[0].dims[2] * 3,
-                                          in_attrs[0].dims[1], V4L2_PIX_FMT_RGB24, 0);
+                                          in_attrs[0].dims[1], V4L2_PIX_FMT_RGB24);
 }
 
 int RKNN::infer(std::shared_ptr<ImgDMABuf> imgd) {
     int ret = 0;
+
+    if (imgd->isValid())
+        return -1;
 
     // resize
     RGA::resizeAndCvtColor(imgd, dstImgd);
@@ -321,12 +324,19 @@ int RKNN::infer(std::shared_ptr<ImgDMABuf> imgd) {
     }
 
     // post process
-    ret = post_process((int8_t *)rkmem_out[0]->virt_addr, (int8_t *)rkmem_out[1]->virt_addr,
-                       (int8_t *)rkmem_out[2]->virt_addr, in_attrs[0].dims[1], in_attrs[0].dims[2], BOX_THRESH,
-                       NMS_THRESH, {0, 0, 0, 0}, (float)in_attrs[0].dims[2] / imgd->img_get_width(),
-                       (float)in_attrs[0].dims[1] / imgd->img_get_height(),
-                       {out_attrs[0].zp, out_attrs[1].zp, out_attrs[2].zp},
-                       {out_attrs[0].scale, out_attrs[1].scale, out_attrs[2].scale}, &group);
+    // ret = post_process((int8_t *)rkmem_out[0]->virt_addr, (int8_t *)rkmem_out[1]->virt_addr,
+    //                    (int8_t *)rkmem_out[2]->virt_addr, in_attrs[0].dims[1], in_attrs[0].dims[2], BOX_THRESH,
+    //                    NMS_THRESH, {0, 0, 0, 0}, (float)in_attrs[0].dims[2] / imgd->img_get_width(),
+    //                    (float)in_attrs[0].dims[1] / imgd->img_get_height(),
+    //                    {out_attrs[0].zp, out_attrs[1].zp, out_attrs[2].zp},
+    //                    {out_attrs[0].scale, out_attrs[1].scale, out_attrs[2].scale}, &group);
+
+    ret = anime_post_process((int8_t *)rkmem_out[0]->virt_addr, (int8_t *)rkmem_out[1]->virt_addr,
+                             (int8_t *)rkmem_out[2]->virt_addr, in_attrs[0].dims[1], in_attrs[0].dims[2], BOX_THRESH,
+                             NMS_THRESH, {0, 0, 0, 0}, (float)in_attrs[0].dims[2] / imgd->img_get_width(),
+                             (float)in_attrs[0].dims[1] / imgd->img_get_height(),
+                             {out_attrs[0].zp, out_attrs[1].zp, out_attrs[2].zp},
+                             {out_attrs[0].scale, out_attrs[1].scale, out_attrs[2].scale}, &group);
     if (ret < 0) {
         std::cerr << "post_process error: " << ret << std::endl;
         goto OUT;

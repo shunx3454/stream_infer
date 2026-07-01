@@ -37,6 +37,8 @@ add_executable(${PROJECT_NAME}
     rknn.cpp
     rga.cpp
     avfmt_img.cpp
+    bufpool.cpp
+    anime_postprocess.cpp
 )
 
 include_directories(${PROJECT_NAME}

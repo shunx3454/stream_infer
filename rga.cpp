@@ -174,10 +174,13 @@
         // resize_rga(src, dst, img, resized_img, target_size);
     }
 #endif
-RGA::RGA() {
 
-    imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
-    std::cout << querystring(RGA_ALL) << std::endl;
+RGA::RGA() {
+    if (!init) {
+        init = 1;
+        imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
+        std::cout << querystring(RGA_ALL) << std::endl;
+    }
 }
 
 void RGA::resizeAndCvtColor(std::shared_ptr<ImgDMABuf> imgd_i, std::shared_ptr<ImgDMABuf> imgd_o) {
@@ -224,6 +227,85 @@ void RGA::drawRect(std::shared_ptr<ImgDMABuf> imgd, detect_result_group_t group)
         auto status = imrectangle(dst, rect, 0x00000000ff, 4);
         if (status != IM_STATUS_SUCCESS) {
             fmt::print("imrectangle error, {}\n", status);
+            return;
+        }
+    }
+}
+
+void RGA::spliceImgs(std::vector<std::shared_ptr<ImgDMABuf>> &imgds, std::shared_ptr<ImgDMABuf> splicedImg) {
+    constexpr int output_width = 1920;
+    constexpr int output_height = 1088;
+    constexpr int tile_width = output_width / 2;
+    constexpr int tile_height = output_height / 2;
+
+    if (!splicedImg || !splicedImg->isValid()) {
+        fmt::print(stderr, "rga splice error: invalid destination DMA buffer\n");
+        return;
+    }
+
+    if (splicedImg->img_get_width() != output_width || splicedImg->img_get_height() != output_height) {
+        fmt::print(stderr, "rga splice error: destination must be {}x{}, got {}x{}\n", output_width, output_height,
+                   splicedImg->img_get_width(), splicedImg->img_get_height());
+        return;
+    }
+
+    const int dst_format = v4l2FmtToRga(splicedImg->img_get_fmt());
+    if (dst_format < 0) {
+        fmt::print(stderr, "rga splice error: unsupported destination pixel format {}\n", splicedImg->img_get_fmt());
+        return;
+    }
+
+    rga_buffer_t dst = wrapbuffer_fd(splicedImg->getFd(), output_width, output_height, dst_format);
+    const im_rect output_rect{0, 0, output_width, output_height};
+
+    IM_STATUS status = imcheck({}, dst, {}, output_rect, IM_COLOR_FILL);
+    if (status != IM_STATUS_NOERROR) {
+        fmt::print(stderr, "rga splice background check failed: {}\n", imStrError(status));
+        return;
+    }
+
+    status = imfill(dst, output_rect, 0xff000000);
+    if (status != IM_STATUS_SUCCESS) {
+        fmt::print(stderr, "rga splice background fill failed: {}\n", imStrError(status));
+        return;
+    }
+
+    const std::array<im_rect, 4> dst_rects{{
+        {0, 0, tile_width, tile_height},
+        {tile_width, 0, tile_width, tile_height},
+        {0, tile_height, tile_width, tile_height},
+        {tile_width, tile_height, tile_width, tile_height},
+    }};
+
+    for (size_t i = 0; i < imgds.size(); ++i) {
+        const auto &img = imgds[i];
+        const im_rect &dst_rect = dst_rects[i];
+
+        if (!img)
+            continue;
+
+        if (!img->isValid()) {
+            fmt::print(stderr, "rga splice error: invalid source DMA buffer at index {}\n", i);
+            return;
+        }
+
+        const int src_format = v4l2FmtToRga(img->img_get_fmt());
+        if (src_format < 0) {
+            fmt::print(stderr, "rga splice error: unsupported source pixel format {} at index {}\n", img->img_get_fmt(),
+                       i);
+            return;
+        }
+
+        rga_buffer_t src = wrapbuffer_fd(img->getFd(), img->img_get_width(), img->img_get_height(), src_format);
+        status = imcheck(src, dst, {}, dst_rect);
+        if (status != IM_STATUS_NOERROR) {
+            fmt::print(stderr, "rga splice check failed at index {}: {}\n", i, imStrError(status));
+            return;
+        }
+
+        status = improcess(src, dst, {}, {}, dst_rect, {}, IM_SYNC);
+        if (status != IM_STATUS_SUCCESS) {
+            fmt::print(stderr, "rga splice failed at index {}: {}\n", i, imStrError(status));
             return;
         }
     }
