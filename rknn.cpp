@@ -290,7 +290,7 @@ RKNN::RKNN(std::string model_name, rknn_core_mask cm) {
 int RKNN::infer(std::shared_ptr<ImgDMABuf> imgd) {
     int ret = 0;
 
-    if (imgd->isValid())
+    if (!imgd || !imgd->isValid())
         return -1;
 
     // resize

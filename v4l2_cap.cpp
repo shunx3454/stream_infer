@@ -512,11 +512,6 @@ void Video::cap_frame_put(std::shared_ptr<ImgDMABuf> pb) {
         buf.m.planes = planes;
     }
 
-    if (ioctl(vfd, VIDIOC_QBUF, &buf) < 0) {
-        fmt::print("cap_frame_put VIDIOC_QBUF failed, reason={}\n", strerror(errno));
-        return;
-    }
-
     // 引用资源
     {
         std::lock_guard lock(mtx_);
@@ -526,6 +521,11 @@ void Video::cap_frame_put(std::shared_ptr<ImgDMABuf> pb) {
         } else {
             it->second = std::move(pb);
         }
+    }
+
+    if (ioctl(vfd, VIDIOC_QBUF, &buf) < 0) {
+        fmt::print("cap_frame_put VIDIOC_QBUF failed, reason={}\n", strerror(errno));
+        return;
     }
 }
 

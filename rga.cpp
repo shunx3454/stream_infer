@@ -178,7 +178,7 @@
 RGA::RGA() {
     if (!init) {
         init = 1;
-        imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
+        //imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_CORE0);
         std::cout << querystring(RGA_ALL) << std::endl;
     }
 }
@@ -221,12 +221,11 @@ void RGA::drawRect(std::shared_ptr<ImgDMABuf> imgd, detect_result_group_t group)
         rect.y &= ~0x1;
 
         // im_rect rect{11, 10, 190, 108};
-
-        fmt::print("rect: {},{} {}x{}\n", rect.x, rect.y, rect.width, rect.height);
-
-        auto status = imrectangle(dst, rect, 0x00000000ff, 4);
+        
+        auto status = imrectangle(dst, rect, 0x00000000ff, 8);
         if (status != IM_STATUS_SUCCESS) {
-            fmt::print("imrectangle error, {}\n", status);
+            fmt::print("imrectangle error, {}\n", imStrError(status));
+            fmt::print("rect: {},{} {}x{}\n", rect.x, rect.y, rect.width, rect.height);
             return;
         }
     }

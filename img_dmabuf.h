@@ -45,7 +45,7 @@ class ImgDMABuf : public DmaBuf {
     void img_set_index(unsigned int index);
 
     void img_set_user_data(void *data);
-    void *img_get_uaer_data();
+    void *img_get_user_data();
 
   private:
     int width_;

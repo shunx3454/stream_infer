@@ -70,7 +70,7 @@ struct videoThreadCfg {
     int height_stride;
     int size;
     int n_buffers;
-    int stream_num;
+    int stream_id;
 
     LFArrayQueue<std::shared_ptr<ImgDMABuf>, 16> *rknn_in_queue;
     std::string path;
@@ -82,6 +82,7 @@ struct ProcessAndStreamingThreadCfg {
     std::string rtsp_url;
     LFArrayQueue<std::shared_ptr<ImgDMABuf>, 16> *rknn_out_queue;
     int gop;
+    int stream_count;
 };
 
 struct rknnThreadCfg {
@@ -106,28 +107,40 @@ void v4l2FrameThread(videoThreadCfg *cfg) {
         auto imgd =
             std::make_shared<ImgDMABuf>(cfg->width, cfg->height, cfg->width_stride, cfg->height_stride, cfg->v4l2Fmt);
         imgd->img_set_index(i);
-        imgd->img_set_stream_id(cfg->stream_num);
+        imgd->img_set_stream_id(cfg->stream_id);
         imgd->img_set_user_data(stream_queue);
         imgd->img_set_fps(cfg->fps);
-        video.cap_frame_put(imgd);
+        stream_queue->push(imgd);
+        imgd.reset();
     }
+
+    std::thread t([&stream_queue, &video] {
+        std::shared_ptr<ImgDMABuf> oimgd;
+
+        // QBUF
+        for (;;) {
+            while (!stream_queue->pop(oimgd)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            video.cap_frame_put(oimgd);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
 
     for (;;) {
         // DBUF
         auto imgd = video.cap_frame_get();
+        imgd->syncDeviceToCpu();
 
         // send to rknn_in_queue
-        if (cfg->rknn_in_queue->push(imgd)) {
-            imgd.reset();
+        while (!cfg->rknn_in_queue->push(imgd)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-
-        // 获取处理完成的imgd
-        if (stream_queue->pop(imgd)) {
-            // QBUF
-            video.cap_frame_put(imgd);
-        }
+        imgd.reset();
     }
 
+    t.join();
     delete stream_queue;
 }
 
@@ -145,11 +158,10 @@ void avfmtFrameThread(videoThreadCfg *cfg) {
     for (int i = 0; i < cfg->n_buffers; ++i) {
         auto imgd = std::make_shared<ImgDMABuf>(avimg.outputWidth(), avimg.outputHeight(), avimg.outputStride(),
                                                 avimg.outputHeight(), cfg->v4l2Fmt);
-        imgd->img_set_stream_id(cfg->stream_num);
+        imgd->img_set_stream_id(cfg->stream_id);
         imgd->img_set_user_data(stream_queue);
         imgd->img_set_fps(cfg->fps);
-        while (!stream_queue->push(imgd))
-            ;
+        stream_queue->push(imgd);
         imgd.reset();
     }
 
@@ -162,11 +174,9 @@ void avfmtFrameThread(videoThreadCfg *cfg) {
 
         if (stream_queue->pop(imgd)) {
             // 传递流配置信息
-            if (avimg.read(imgd, frame)) {
-                while (!cfg->rknn_in_queue->push(frame.dmabuf)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-            }
+            while (!avimg.read(imgd, frame))
+                ;
+            cfg->rknn_in_queue->push(imgd);
         }
 
         // 帧率控制
@@ -203,7 +213,7 @@ void processAndRTSPThread(ProcessAndStreamingThreadCfg *cfg) {
     RGA rga;
 
     // mpp
-    MppEncoder encoder(cfg->vcfg.width, cfg->vcfg.width, cfg->mppFmt, cfg->vcfg.width_stride, cfg->vcfg.height_stride,
+    MppEncoder encoder(cfg->vcfg.width, cfg->vcfg.height, cfg->mppFmt, cfg->vcfg.width_stride, cfg->vcfg.height_stride,
                        cfg->vcfg.fps, cfg->gop);
     encoder.init();
     auto hdr = encoder.getHdr();
@@ -213,10 +223,10 @@ void processAndRTSPThread(ProcessAndStreamingThreadCfg *cfg) {
     rtsp_client.init(cfg->rtsp_url, cfg->vcfg.width, cfg->vcfg.height, cfg->vcfg.fps, hdr.data(), hdr.size());
 
     // 建立4个待RGA缩放的imgds数组
-    std::vector<std::shared_ptr<ImgDMABuf>> imgds(cfg->vcfg.stream_num);
+    std::vector<std::shared_ptr<ImgDMABuf>> imgds(cfg->stream_count);
     // 4个RGA缩放后的imgds数组
-    std::vector<std::shared_ptr<ImgDMABuf>> rga_imgds(cfg->vcfg.stream_num);
-    for (int i = 0; i < cfg->vcfg.stream_num; ++i) {
+    std::vector<std::shared_ptr<ImgDMABuf>> rga_imgds(cfg->stream_count);
+    for (int i = 0; i < cfg->stream_count; ++i) {
         rga_imgds[i] =
             std::make_shared<ImgDMABuf>(cfg->vcfg.width / 2, cfg->vcfg.height / 2, cfg->vcfg.width_stride / 2,
                                         cfg->vcfg.height_stride / 2, cfg->vcfg.v4l2Fmt);
@@ -235,47 +245,48 @@ void processAndRTSPThread(ProcessAndStreamingThreadCfg *cfg) {
         cfg->vcfg.width, cfg->vcfg.height, cfg->vcfg.width_stride, cfg->vcfg.height_stride, cfg->vcfg.v4l2Fmt);
 
     std::shared_ptr<ImgDMABuf> im;
-    int stream_id;
     int64_t frameDurationMS = 1000. / (double)cfg->vcfg.fps;
+    int64_t ts, t1, t2, t3, t4;
 
     for (;;) {
-        auto ts = get_now_ms();
+        ts = get_now_ms();
 
         // 获取 rknn out imgd
-        while (!cfg->rknn_out_queue->pop(im)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
+        while (cfg->rknn_out_queue->pop(im)) {
+            auto *stream_queue = (LFArrayQueue<std::shared_ptr<ImgDMABuf>, 4> *)im->img_get_user_data();
+            int stream_id = im->img_get_stream_id();
 
-        auto *stream_queue = (LFArrayQueue<std::shared_ptr<ImgDMABuf>, 4> *)im->img_get_uaer_data();
-        stream_id = im->img_get_stream_id();
-
-        if (imgds[stream_id] != nullptr) {
-            // 释放上一帧 占用
-            while (!stream_queue->push(imgds[stream_id])) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (imgds[stream_id] != nullptr) {
+                // 释放上一帧 占用
+                stream_queue->push(imgds[stream_id]);
+                imgds[stream_id].reset();
             }
-            imgds[stream_id].reset();
-        }
-
-        // 保存最新的
-        imgds[stream_id] = std::move(im);
-
-        if (imgds[stream_id]->img_get_fps() >= cfg->vcfg.fps) {
+            // 保存最新的
+            imgds[stream_id] = std::move(im);
             // RGA缩放
             RGA::resizeAndCvtColor(imgds[stream_id], rga_imgds[stream_id]);
-
-            // RGA拼接更新
-            RGA::spliceImgs(rga_imgds, Imgd);
-
-            // MPP 编码 & RTSP 发送
-            encoder.encode(Imgd, pktd, (Imgd_seq % cfg->vcfg.fps) == 0 ? 1 : 0, 0,
-                           [&rtsp_client](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
-                               //    t3 = get_now_ms();
-                               rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
-                               //    t4 = get_now_ms();
-                           });
-            ++Imgd_seq;
         }
+
+        t1 = get_now_ms();
+
+        // RGA拼接更新
+        RGA::spliceImgs(rga_imgds, Imgd);
+
+        t2 = get_now_ms();
+
+        // MPP 编码 & RTSP 发送
+        encoder.encode(Imgd, pktd, (Imgd_seq % cfg->vcfg.fps) == 0 ? 1 : 0, 0,
+                       [&](const void *ptr, size_t len, RK_U32 is_keyframe, RK_U32 eos) {
+                           t3 = get_now_ms();
+                           rtsp_client.push_h264_packet((const uint8_t *)ptr, len, is_keyframe);
+                           t4 = get_now_ms();
+                       });
+        ++Imgd_seq;
+
+        auto t5 = get_now_ms();
+        fmt::print("time elapse: get rknn img {} ms, rga process {} ms, mpp encode {} ms, rtsp send {} ms, process "
+                   "completion {} ms\n",
+                   t1 - ts, t2 - t1, t3 - t2, t4 - t3, t5 - ts);
 
         int64_t sleepms = frameDurationMS - (get_now_ms() - ts);
         if (sleepms < 0)
@@ -316,12 +327,12 @@ int main(int argc, char *argv[]) {
     cfg0->path = "/dev/video11";
     cfg0->width = 1920;
     cfg0->height = 1088;
+    cfg0->v4l2Fmt = V4L2_PIX_FMT_UYVY;
     cfg0->width_stride = cfg0->width * 2;
     cfg0->height_stride = cfg0->height;
-    cfg0->v4l2Fmt = V4L2_PIX_FMT_UYVY;
-    cfg0->fps = 60;
     cfg0->size = cfg0->width_stride * cfg0->height_stride;
-    cfg0->stream_num = 0;
+    cfg0->fps = 60;
+    cfg0->stream_id = 0;
     cfg0->n_buffers = 4;
     cfg0->rknn_in_queue = rknn_in_queue;
     std::thread v4l2Thread0(&v4l2FrameThread, cfg0);
@@ -330,15 +341,32 @@ int main(int argc, char *argv[]) {
     cfg1->path = "/dev/video21";
     cfg1->width = 640;
     cfg1->height = 480;
+    cfg1->v4l2Fmt = V4L2_PIX_FMT_YUYV;
     cfg1->width_stride = cfg1->width * 2;
     cfg1->height_stride = cfg1->height;
-    cfg1->v4l2Fmt = V4L2_PIX_FMT_YUYV;
-    cfg1->fps = 30;
     cfg1->size = cfg1->width_stride * cfg1->height_stride;
-    cfg1->stream_num = 1;
+    cfg1->fps = 30;
+    cfg1->stream_id = 1;
     cfg1->n_buffers = 4;
     cfg1->rknn_in_queue = rknn_in_queue;
     std::thread v4l2Thread1(&v4l2FrameThread, cfg1);
+
+    // avfmt 获取帧
+    videoThreadCfg *cfg2 = new videoThreadCfg();
+    cfg2->path = "/home/rock/c_cpp/stream_infer/asset/CosmicPrincessKaguya_Reply_MV.mp4";
+    cfg2->v4l2Fmt = V4L2_PIX_FMT_YUYV;
+    cfg2->stream_id = 2;
+    cfg2->n_buffers = 4;
+    cfg2->rknn_in_queue = rknn_in_queue;
+    std::thread avfmtThread0(&avfmtFrameThread, cfg2);
+
+    videoThreadCfg *cfg3 = new videoThreadCfg();
+    cfg3->path = "/home/rock/c_cpp/stream_infer/asset/CosmicPrincessKaguya_ray_MV.mp4";
+    cfg3->v4l2Fmt = V4L2_PIX_FMT_YUYV;
+    cfg3->stream_id = 3;
+    cfg3->n_buffers = 4;
+    cfg3->rknn_in_queue = rknn_in_queue;
+    std::thread avfmtThread1(&avfmtFrameThread, cfg3);
 
     // rknn多线程推理
     rknnThreadCfg *rknnCfg0 = new rknnThreadCfg();
@@ -363,18 +391,17 @@ int main(int argc, char *argv[]) {
     std::thread RknnThread2(&imgInferThread, rknnCfg2);
 
     // 拼接帧和推流
-    ProcessAndStreamingThreadCfg* StreamingCfg = new ProcessAndStreamingThreadCfg();
+    ProcessAndStreamingThreadCfg *StreamingCfg = new ProcessAndStreamingThreadCfg();
     StreamingCfg->vcfg.path = "";
     StreamingCfg->vcfg.width = 1920;
     StreamingCfg->vcfg.height = 1088;
-    StreamingCfg->vcfg.width_stride = cfg0->width * 2;
-    StreamingCfg->vcfg.height_stride = cfg0->height;
+    StreamingCfg->vcfg.width_stride = StreamingCfg->vcfg.width * 2;
+    StreamingCfg->vcfg.height_stride = StreamingCfg->vcfg.height;
     StreamingCfg->vcfg.v4l2Fmt = V4L2_PIX_FMT_UYVY;
     StreamingCfg->vcfg.fps = 60;
     StreamingCfg->vcfg.size = StreamingCfg->vcfg.width_stride * StreamingCfg->vcfg.height_stride;
-    StreamingCfg->vcfg.stream_num = 0;
-    StreamingCfg->vcfg.n_buffers = 0;
     StreamingCfg->vcfg.rknn_in_queue = nullptr;
+    StreamingCfg->stream_count = 4;
 
     StreamingCfg->gop = 30;
     StreamingCfg->mppFmt = MPP_FMT_YUV422_UYVY;
@@ -384,6 +411,8 @@ int main(int argc, char *argv[]) {
 
     v4l2Thread0.join();
     v4l2Thread1.join();
+    avfmtThread0.join();
+    avfmtThread1.join();
 
     RknnThread0.join();
     RknnThread1.join();

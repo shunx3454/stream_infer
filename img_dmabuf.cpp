@@ -39,7 +39,7 @@ void ImgDMABuf::img_set_user_data(void *data) {
     data_ = data;
 }
 
-void *ImgDMABuf::img_get_uaer_data() { return data_; }
+void *ImgDMABuf::img_get_user_data() { return data_; }
 
 ImgDMABufPool::ImgDMABufPool(size_t n) {
     capacity_ = n;
